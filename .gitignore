@@ -18,3 +18,5 @@ local_settings.py
 # Editor / IDE configuration
 .vscode/
 .idea/
+# Celery Beat runtime files
+celerybeat-schedule*
