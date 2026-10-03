@@ -1,9 +1,14 @@
+import os
 from pathlib import Path
+from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = 'django-insecure--so+b6g^vf_@t(f*c67l(*wugoc_9c@4#0bo^g=!9c60js4lya'
+# Load .env file
+load_dotenv(BASE_DIR / '.env')
 
+# Read SECRET_KEY from .env
+SECRET_KEY = os.environ["SECRET_KEY"]
 DEBUG = True
 
 ALLOWED_HOSTS = []
@@ -61,11 +66,11 @@ WSGI_APPLICATION = 'omninews_backend.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'omninews',
-        'USER': 'root',
-        'PASSWORD': '',  # Default XAMPP root password is blank
-        'HOST': '127.0.0.1',
-        'PORT': '3306',
+        'NAME': os.environ['DB_NAME'],
+        'USER': os.environ['DB_USER'],
+        'PASSWORD': os.environ['DB_PASSWORD'],
+        'HOST': os.environ['DB_HOST'],
+        'PORT': os.environ['DB_PORT'],
         'OPTIONS': {
             'charset': 'utf8mb4',
         },
