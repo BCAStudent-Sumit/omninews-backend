@@ -29,15 +29,16 @@ class FeedView(generics.ListAPIView):
     def get_queryset(self):
         user = self.request.user
 
-        # If raw_feed is enabled, return newest first
+        # 1. Added '-id' tiebreaker here for raw feed
         if getattr(user, 'raw_feed', False):
-            return Article.objects.all().order_by('-published_at')
+            return Article.objects.all().order_by('-published_at', '-id')
 
         # Retrieve user preferences
         user_genres = user.genres.all()
         user_region = getattr(user, 'home_region', None)
 
         # Dynamic scoring: +2 for preferred genre, +1 for home region
+        # 2. Added '-id' tiebreaker here as the final sort key
         return Article.objects.annotate(
             genre_score=Case(
                 When(genre__in=user_genres, then=Value(2)),
@@ -50,4 +51,4 @@ class FeedView(generics.ListAPIView):
                 output_field=IntegerField(),
             ),
             total_score=F('genre_score') + F('region_score')
-        ).order_by('-total_score', '-published_at')
+        ).order_by('-total_score', '-published_at', '-id')
