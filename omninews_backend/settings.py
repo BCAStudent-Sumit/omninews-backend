@@ -119,3 +119,19 @@ SIMPLE_JWT = {
 }
 
 CORS_ALLOW_ALL_ORIGINS = True
+
+# Celery Configuration
+CELERY_BROKER_URL = 'redis://127.0.0.1:6379/0'
+CELERY_RESULT_BACKEND = 'redis://127.0.0.1:6379/0'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = TIME_ZONE
+
+# Celery Beat Periodic Scheduling
+CELERY_BEAT_SCHEDULE = {
+    'fetch-news-every-10-minutes': {
+        'task': 'news.tasks.ingest_rss_feeds',
+        'schedule': 600.0,  # Runs every 600 seconds (10 minutes)
+    },
+}

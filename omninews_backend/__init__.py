@@ -6,3 +6,8 @@ BaseDatabaseWrapper.check_database_version_supported = lambda self: None
 
 # 2. Disable 'RETURNING' clause for MariaDB 10.4 compatibility
 DatabaseFeatures.can_return_columns_from_insert = False
+
+# 3. Expose Celery app so shared_task works properly
+from .celery import app as celery_app
+
+__all__ = ('celery_app',)
