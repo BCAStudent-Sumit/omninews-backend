@@ -1,24 +1,29 @@
 import math
 
+# Tunable thresholds
+ACTIVATION_WEIGHT_THRESHOLD = 9.0  # Requires collective weight from multiple established accounts
+MINIMUM_REPUTABLE_VOTERS = 3       # Diversity requirement (distinct reputable human accounts)
+REPUTABLE_KARMA_CUTOFF = 5         # Cutoff for what constitutes an established voter
+CONSENSUS_RATIO_THRESHOLD = 0.65   # Supermajority consensus requirement (65%)
+MAX_VOTER_WEIGHT = 3.5             # Upper bound on any single voter's weight (caps whale dominance)
+
 
 def calculate_vote_weight(voter_karma: int) -> float:
-    """Zero karma has 0 weight; reputation scales sub-linearly."""
+    """
+    Zero karma yields 0.0 weight.
+    Reputation scales sub-linearly and is capped at MAX_VOTER_WEIGHT to eliminate whale dominance.
+    """
     if voter_karma <= 0:
         return 0.0
-    return math.sqrt(voter_karma)
+    raw_weight = math.sqrt(voter_karma)
+    return min(raw_weight, MAX_VOTER_WEIGHT)
 
 
 def should_clarify(votes: list[tuple[int, int]]) -> bool:
     """
     Evaluates whether a claim qualifies for a Clarify badge.
-    Each vote is a tuple of (value, voter_karma) where:
-      - value: +1 (votes to clarify/flag) or -1 (validates original article/rejects claim)
-      - voter_karma: integer score >= 0
+    Each vote is a tuple of (value, voter_karma).
     """
-    ACTIVATION_WEIGHT_THRESHOLD = 8.0  # Combined affirmative weight required
-    MINIMUM_REPUTABLE_VOTERS = 3       # Diversity requirement (cannot be triggered by 1-2 users)
-    REPUTABLE_KARMA_CUTOFF = 5         # Established account threshold
-
     affirmative_weight = 0.0
     negative_weight = 0.0
     reputable_affirmative_voters = 0
@@ -33,18 +38,18 @@ def should_clarify(votes: list[tuple[int, int]]) -> bool:
         elif value < 0:
             negative_weight += weight
 
-    # Rule 1: Must satisfy diversity threshold
+    # Rule 1: Diversity threshold (at least N distinct reputable voters)
     if reputable_affirmative_voters < MINIMUM_REPUTABLE_VOTERS:
         return False
 
-    # Rule 2: Must satisfy net positive weight threshold
+    # Rule 2: Minimum collective weight threshold
     net_weight = affirmative_weight - negative_weight
     if net_weight < ACTIVATION_WEIGHT_THRESHOLD:
         return False
 
-    # Rule 3: Must maintain at least 65% affirmative consensus
+    # Rule 3: Supermajority agreement ratio
     total_active_weight = affirmative_weight + negative_weight
-    if total_active_weight == 0 or (affirmative_weight / total_active_weight) < 0.65:
+    if total_active_weight == 0 or (affirmative_weight / total_active_weight) < CONSENSUS_RATIO_THRESHOLD:
         return False
 
     return True

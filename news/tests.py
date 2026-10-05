@@ -111,6 +111,15 @@ class ClarifyBadgeRuleTestCase(APITestCase):
         votes = [(1, 25), (1, 25), (1, 25), (-1, 36), (-1, 36)]
         self.assertFalse(should_clarify(votes))
 
+    def test_whale_plus_two_nominal_accounts_cannot_produce_badge(self):
+        """Whale defense: a single account with massive karma cannot drag nominal accounts across the threshold."""
+        # 1 whale (10,000 karma) + 2 accounts at the bare minimum cutoff (5 karma each)
+        votes = [(1, 10000), (1, 5), (1, 5)]
+        self.assertFalse(
+            should_clarify(votes),
+            "A whale with two nominal accounts must not trigger a badge alone."
+        )
+
 
 class ClarifyBadgeIntegrationTestCase(APITestCase):
     """Database integration tests checking vote saving, triggers, and constraints."""
