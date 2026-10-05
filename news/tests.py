@@ -160,3 +160,45 @@ class ClarifyBadgeIntegrationTestCase(APITestCase):
 
         with self.assertRaises(IntegrityError):
             ClaimVote.objects.create(claim=self.claim, user=voter, value=1)
+
+
+class ClaimAPIEndpointTestCase(APITestCase):
+    """API endpoint tests for submitting claims and voting."""
+
+    def setUp(self):
+        self.source = Source.objects.create(name="Reuters", url="https://reuters.com")
+        self.article = Article.objects.create(
+            title="API Test Article",
+            body="Context body",
+            url="https://reuters.com/api-test",
+            source=self.source,
+            published_at=timezone.now()
+        )
+        self.user = User.objects.create_user(username="api_user", password="password123", karma=10)
+        self.client.force_authenticate(user=self.user)
+
+    def test_create_claim_with_evidence(self):
+        url = f"/api/news/articles/{self.article.id}/claims/"
+        payload = {
+            "text": "This article misrepresents the numbers.",
+            "evidence_urls": ["https://primarysource.org/doc1"]
+        }
+        response = self.client.post(url, payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(ClarificationClaim.objects.count(), 1)
+        self.assertEqual(self.article.claims.first().evidence_links.count(), 1)
+
+    def test_cast_vote_api(self):
+        claim = ClarificationClaim.objects.create(
+            article=self.article, author=self.user, text="Disputed claim"
+        )
+        url = f"/api/news/claims/{claim.id}/vote/"
+        response = self.client.post(url, {"value": 1}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(ClaimVote.objects.count(), 1)
+
+        # Test updating the existing vote from +1 to -1
+        response = self.client.post(url, {"value": -1}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(ClaimVote.objects.count(), 1)
+        self.assertEqual(ClaimVote.objects.first().value, -1)
