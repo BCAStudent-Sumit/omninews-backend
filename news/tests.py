@@ -88,6 +88,31 @@ class FeedTestCase(APITestCase):
         self.assertEqual(results[0]["id"], self.newest_unmatched_article.id)
         self.assertEqual(results[1]["id"], self.top_match_article.id)
 
+    def test_feed_filtering_by_genre_and_region(self):
+        """Authenticated feed supports explicit genre and region query parameters."""
+        self.client.force_authenticate(user=self.ranked_user)
+
+        # Filter by sports genre (matches only newest_unmatched_article)
+        response = self.client.get(f"/api/news/feed/?genre={self.genre_sports.id}")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.data.get("results", response.data)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["id"], self.newest_unmatched_article.id)
+
+    def test_feed_filtering_by_clarify_status(self):
+        """Authenticated feed supports filtering by clarify_status."""
+        self.client.force_authenticate(user=self.ranked_user)
+
+        # Flag top_match_article as clarified
+        self.top_match_article.clarify_status = Article.ClarifyStatus.CLARIFIED
+        self.top_match_article.save(update_fields=["clarify_status"])
+
+        response = self.client.get("/api/news/feed/?clarify_status=clarified")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.data.get("results", response.data)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["id"], self.top_match_article.id)
+
 
 class ClarifyBadgeRuleTestCase(APITestCase):
     """Unit tests verifying the pure Python badge evaluation logic."""
