@@ -1,6 +1,6 @@
 from django.db import models
 from django.conf import settings
-
+from django.db.models import Q
 
 class Genre(models.Model):
     name = models.CharField(max_length=50, unique=True)
@@ -88,5 +88,12 @@ class ClaimVote(models.Model):
             models.UniqueConstraint(fields=['claim', 'user'], name='unique_user_claim_vote')
         ]
 
+        constraints = [
+    models.UniqueConstraint(fields=['claim', 'user'], name='unique_user_claim_vote'),
+    models.CheckConstraint(
+        condition=Q(value__in=[1, -1]),
+        name='claim_vote_value_is_plus_or_minus_one',
+    ),
+]
     def __str__(self):
         return f"Vote {self.value} by User {self.user_id} on Claim {self.claim_id}"

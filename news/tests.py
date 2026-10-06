@@ -1,4 +1,5 @@
 from datetime import timedelta
+from django.contrib.auth.models import AbstractUser
 from django.utils import timezone
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError
@@ -207,6 +208,12 @@ class ClarifyBadgeIntegrationTestCase(APITestCase):
         self.assertTrue(self.claim.is_active_badge, "Badge must remain active despite late dissenting vote.")
         self.assertEqual(self.article.clarify_status, Article.ClarifyStatus.CLARIFIED)
 
+    def test_vote_value_must_be_plus_or_minus_one(self):
+        """Database constraint must reject vote values other than +1 or -1."""
+        voter = User.objects.create_user(username="bad_value_voter", karma=10)
+        with self.assertRaises(IntegrityError):
+            ClaimVote.objects.create(claim=self.claim, user=voter, value=5)
+            
 class ClaimAPIEndpointTestCase(APITestCase):
     """API endpoint tests for submitting claims and voting."""
 
