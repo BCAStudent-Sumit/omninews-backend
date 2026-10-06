@@ -227,6 +227,7 @@ class ClaimAPIEndpointTestCase(APITestCase):
             published_at=timezone.now()
         )
         self.user = User.objects.create_user(username="api_user", password="password123", karma=10)
+        self.other_user = User.objects.create_user(username="claim_owner", password="password123", karma=10)
         self.client.force_authenticate(user=self.user)
 
     def test_create_claim_with_evidence(self):
@@ -240,17 +241,20 @@ class ClaimAPIEndpointTestCase(APITestCase):
         self.assertEqual(ClarificationClaim.objects.count(), 1)
         self.assertEqual(self.article.claims.first().evidence_links.count(), 1)
 
-    def test_cast_vote_api(self):
+    def test_author_cannot_vote_on_own_claim(self):
         claim = ClarificationClaim.objects.create(
-            article=self.article, author=self.user, text="Disputed claim"
+            article=self.article, author=self.user, text="My own claim"
         )
         url = f"/api/news/claims/{claim.id}/vote/"
         response = self.client.post(url, {"value": 1}, format="json")
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(ClaimVote.objects.count(), 1)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(ClaimVote.objects.count(), 0)
 
-        # Test updating the existing vote from +1 to -1
-        response = self.client.post(url, {"value": -1}, format="json")
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(ClaimVote.objects.count(), 1)
-        self.assertEqual(ClaimVote.objects.first().value, -1)
+    def test_invalid_vote_value_returns_400(self):
+        claim = ClarificationClaim.objects.create(
+            article=self.article, author=self.other_user, text="Another claim"
+        )
+        url = f"/api/news/claims/{claim.id}/vote/"
+        response = self.client.post(url, {"value": 5}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(ClaimVote.objects.count(), 0)

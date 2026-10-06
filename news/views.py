@@ -1,5 +1,7 @@
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
+from django.db import transaction
+from rest_framework.exceptions import PermissionDenied
 from django.db.models import Case, When, Value, IntegerField, F
 from .models import Article, Genre, ClarificationClaim, ClaimVote
 from .serializers import (
@@ -49,17 +51,22 @@ class FeedView(generics.ListAPIView):
 
         # Dynamic scoring: +2 for preferred genre, +1 for home region
         # 2. Ordered by '-total_score', '-published_at', and '-id' tiebreaker
+        if user_region is not None:
+            region_score = Case(
+                When(region=user_region, then=Value(1)),
+                default=Value(0),
+                output_field=IntegerField(),
+            )
+        else:
+            region_score = Value(0, output_field=IntegerField())
+
         return Article.objects.annotate(
             genre_score=Case(
                 When(genre__in=user_genres, then=Value(2)),
                 default=Value(0),
                 output_field=IntegerField(),
             ),
-            region_score=Case(
-                When(region=user_region, then=Value(1)),
-                default=Value(0),
-                output_field=IntegerField(),
-            ),
+            region_score=region_score,
             total_score=F('genre_score') + F('region_score'),
         ).order_by('-total_score', '-published_at', '-id')
 
@@ -91,19 +98,24 @@ class CastClaimVoteView(generics.GenericAPIView):
 
     def post(self, request, claim_id):
         claim = generics.get_object_or_404(ClarificationClaim, id=claim_id)
+
+        # Authors cannot vote on their own claims
+        if claim.author_id == request.user.id:
+            raise PermissionDenied("You cannot vote on your own claim.")
+
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
         vote_val = serializer.validated_data['value']
 
-        vote, created = ClaimVote.objects.update_or_create(
-            claim=claim,
-            user=request.user,
-            defaults={'value': vote_val},
-        )
+        with transaction.atomic():
+            vote, created = ClaimVote.objects.update_or_create(
+                claim=claim,
+                user=request.user,
+                defaults={'value': vote_val},
+            )
+            # Evaluate claim consensus with row-level locks
+            resolve_claim_if_ready(claim)
 
-        # Evaluate claim consensus with row-level locks
-        resolve_claim_if_ready(claim)
         claim.refresh_from_db()
 
         return Response(
