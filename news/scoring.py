@@ -1,4 +1,5 @@
 import math
+from django.db import transaction
 
 # Tunable thresholds
 ACTIVATION_WEIGHT_THRESHOLD = 9.0  # Requires collective weight from multiple established accounts
@@ -53,3 +54,45 @@ def should_clarify(votes: list[tuple[int, int]]) -> bool:
         return False
 
     return True
+
+
+def resolve_claim_if_ready(claim) -> bool:
+    """
+    Evaluates whether a claim qualifies for resolution using row-level locking.
+    Runs inside a single atomic transaction.
+    Returns True ONLY if this specific invocation transitioned the claim to resolved.
+    Returns False if the claim was already resolved or consensus was not met.
+    """
+    from news.models import ClarificationClaim, Article
+
+    with transaction.atomic():
+        locked_claim = (
+            ClarificationClaim.objects
+            .select_for_update()
+            .select_related("article")
+            .get(id=claim.id)
+        )
+
+        # 1. Early exit: already resolved, so nothing newly resolved on this call
+        if locked_claim.is_active_badge:
+            return False
+
+        # 2. Extract (value, voter_karma) from current votes
+        votes_data = list(
+            locked_claim.votes.values_list("value", "user__karma")
+        )
+
+        # 3. Evaluate consensus
+        if should_clarify(votes_data):
+            locked_claim.is_active_badge = True
+            locked_claim.save(update_fields=["is_active_badge"])
+            claim.is_active_badge = True
+
+            article = locked_claim.article
+            if article.clarify_status != Article.ClarifyStatus.CLARIFIED:
+                article.clarify_status = Article.ClarifyStatus.CLARIFIED
+                article.save(update_fields=["clarify_status"])
+
+            return True
+
+        return False

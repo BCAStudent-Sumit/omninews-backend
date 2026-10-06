@@ -1,6 +1,5 @@
 from django.db import models
 from django.conf import settings
-from news.scoring import should_clarify
 
 
 class Genre(models.Model):
@@ -56,48 +55,32 @@ class Article(models.Model):
 
 class ClarificationClaim(models.Model):
     article = models.ForeignKey(Article, on_delete=models.CASCADE, related_name='claims')
-    author = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='submitted_claims')
-    text = models.CharField(max_length=500, help_text="The factual statement or context being clarified")
-    is_active_badge = models.BooleanField(default=False, help_text="Whether this claim has earned a community badge")
+    author = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='claims')
+    text = models.TextField()
+    is_active_badge = models.BooleanField(
+        default=False, 
+        help_text="Whether this claim has earned a community badge"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"Claim #{self.id} on Article #{self.article_id}"
-
-    def recalculate_badge_status(self) -> bool:
-        """
-        Pulls all votes and voter karma from the DB, runs should_clarify,
-        and persists the badge state.
-        """
-        votes_data = list(self.votes.values_list('value', 'user__karma'))
-        qualified = should_clarify(votes_data)
-
-        if self.is_active_badge != qualified:
-            self.is_active_badge = qualified
-            self.save(update_fields=['is_active_badge'])
-
-            # Sync article clarify_status if badge becomes active
-            if qualified and self.article.clarify_status != Article.ClarifyStatus.CLARIFIED:
-                self.article.clarify_status = Article.ClarifyStatus.CLARIFIED
-                self.article.save(update_fields=['clarify_status'])
-
-        return qualified
+        return f"Claim #{self.id} on Article {self.article_id}"
 
 
 class Evidence(models.Model):
     claim = models.ForeignKey(ClarificationClaim, on_delete=models.CASCADE, related_name='evidence_links')
     url = models.URLField(max_length=500)
-    title = models.CharField(max_length=255, blank=True)
+    title = models.CharField(max_length=255, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return self.title or self.url
+        return self.url
 
 
 class ClaimVote(models.Model):
     claim = models.ForeignKey(ClarificationClaim, on_delete=models.CASCADE, related_name='votes')
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='claim_votes')
-    value = models.SmallIntegerField(help_text="+1 for agree/clarify, -1 for disagree")
+    value = models.SmallIntegerField()  # +1 or -1
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -105,9 +88,5 @@ class ClaimVote(models.Model):
             models.UniqueConstraint(fields=['claim', 'user'], name='unique_user_claim_vote')
         ]
 
-    def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-        self.claim.recalculate_badge_status()
-
     def __str__(self):
-        return f"Vote({self.value}) by {self.user} on Claim #{self.claim_id}"
+        return f"Vote {self.value} by User {self.user_id} on Claim {self.claim_id}"

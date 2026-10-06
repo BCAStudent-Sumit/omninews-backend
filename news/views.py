@@ -8,6 +8,7 @@ from .serializers import (
     ClarificationClaimSerializer,
     ClaimVoteSerializer,
 )
+from .scoring import resolve_claim_if_ready
 
 
 class GenreListView(generics.ListAPIView):
@@ -95,14 +96,14 @@ class CastClaimVoteView(generics.GenericAPIView):
 
         vote_val = serializer.validated_data['value']
 
-        # update_or_create handles initial votes and toggling between +1 and -1 cleanly
         vote, created = ClaimVote.objects.update_or_create(
             claim=claim,
             user=request.user,
             defaults={'value': vote_val},
         )
 
-        # Refresh claim to reflect updated badge status triggered by ClaimVote.save()
+        # Evaluate claim consensus with row-level locks
+        resolve_claim_if_ready(claim)
         claim.refresh_from_db()
 
         return Response(

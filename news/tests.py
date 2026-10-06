@@ -6,7 +6,7 @@ from rest_framework.test import APITestCase
 from rest_framework import status
 
 from news.models import Article, Source, Genre, Region, ClarificationClaim, ClaimVote
-from news.scoring import should_clarify
+from news.scoring import should_clarify, resolve_claim_if_ready
 
 User = get_user_model()
 
@@ -112,8 +112,7 @@ class ClarifyBadgeRuleTestCase(APITestCase):
         self.assertFalse(should_clarify(votes))
 
     def test_whale_plus_two_nominal_accounts_cannot_produce_badge(self):
-        """Whale defense: a single account with massive karma cannot drag nominal accounts across the threshold."""
-        # 1 whale (10,000 karma) + 2 accounts at the bare minimum cutoff (5 karma each)
+        """Whale defense: a single account with massive karma cannot drag nominal accounts across threshold."""
         votes = [(1, 10000), (1, 5), (1, 5)]
         self.assertFalse(
             should_clarify(votes),
@@ -146,19 +145,27 @@ class ClarifyBadgeIntegrationTestCase(APITestCase):
             voter = User.objects.create_user(username=f"zero_voter_{i}", karma=0)
             ClaimVote.objects.create(claim=self.claim, user=voter, value=1)
 
+        result = resolve_claim_if_ready(self.claim)
+        self.assertFalse(result)
+
         self.claim.refresh_from_db()
+        self.article.refresh_from_db()
         self.assertFalse(self.claim.is_active_badge)
-        self.assertEqual(self.claim.article.clarify_status, Article.ClarifyStatus.NONE)
+        self.assertEqual(self.article.clarify_status, Article.ClarifyStatus.NONE)
 
     def test_established_accounts_activate_badge_and_article_status(self):
         """Diverse established accounts agreeing triggers badge and updates article status."""
         for i in range(3):
-            voter = User.objects.create_user(username=f"veteran_{i}", karma=25)
+            voter = User.objects.create_user(username=f"veteran_{i}", password="password123")
+            voter.karma = 25
+            voter.save(update_fields=["karma"])
             ClaimVote.objects.create(claim=self.claim, user=voter, value=1)
+
+        result = resolve_claim_if_ready(self.claim)
+        self.assertTrue(result)
 
         self.claim.refresh_from_db()
         self.article.refresh_from_db()
-
         self.assertTrue(self.claim.is_active_badge)
         self.assertEqual(self.article.clarify_status, Article.ClarifyStatus.CLARIFIED)
 
@@ -170,6 +177,35 @@ class ClarifyBadgeIntegrationTestCase(APITestCase):
         with self.assertRaises(IntegrityError):
             ClaimVote.objects.create(claim=self.claim, user=voter, value=1)
 
+    def test_already_resolved_claim_ignores_subsequent_votes(self):
+        """Once resolved, subsequent votes do not trigger re-resolution, and status remains intact."""
+        # 1. Reach resolution threshold with 3 reputable accounts (karma=25 each)
+        for i in range(3):
+            voter = User.objects.create_user(username=f"seed_voter_{i}", password="password123")
+            voter.karma = 25
+            voter.save(update_fields=["karma"])
+            ClaimVote.objects.create(claim=self.claim, user=voter, value=1)
+
+        first_resolution = resolve_claim_if_ready(self.claim)
+        self.assertTrue(first_resolution, "First invocation must resolve the claim (returns True).")
+        self.claim.refresh_from_db()
+        self.assertTrue(self.claim.is_active_badge)
+
+        # 2. Add an opposing vote after resolution
+        dissenter = User.objects.create_user(username="late_dissenter", password="password123")
+        dissenter.karma = 100
+        dissenter.save(update_fields=["karma"])
+        ClaimVote.objects.create(claim=self.claim, user=dissenter, value=-1)
+
+        # 3. Running resolution again must return False (nothing newly resolved), but badge stays active
+        self.claim.refresh_from_db()
+        second_resolution = resolve_claim_if_ready(self.claim)
+        self.assertFalse(second_resolution, "Second invocation must return False (already resolved).")
+
+        self.claim.refresh_from_db()
+        self.article.refresh_from_db()
+        self.assertTrue(self.claim.is_active_badge, "Badge must remain active despite late dissenting vote.")
+        self.assertEqual(self.article.clarify_status, Article.ClarifyStatus.CLARIFIED)
 
 class ClaimAPIEndpointTestCase(APITestCase):
     """API endpoint tests for submitting claims and voting."""
