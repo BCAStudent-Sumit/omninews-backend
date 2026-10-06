@@ -34,7 +34,7 @@ class Article(models.Model):
 
     title = models.CharField(max_length=300)
     body = models.TextField()
-    url = models.URLField(unique=True)  # prevents duplicate ingestion
+    url = models.URLField(max_length=2048, unique=True) # prevents duplicate ingestion
     source = models.ForeignKey(Source, on_delete=models.CASCADE, related_name="articles")
     genre = models.ForeignKey(Genre, on_delete=models.SET_NULL, null=True, related_name="articles")
     region = models.ForeignKey(Region, on_delete=models.SET_NULL, null=True, related_name="articles")
