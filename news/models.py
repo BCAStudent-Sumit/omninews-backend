@@ -61,6 +61,10 @@ class ClarificationClaim(models.Model):
         default=False, 
         help_text="Whether this claim has earned a community badge"
     )
+    karma_awarded = models.BooleanField(
+        default=False,
+        help_text="Ensures reputation payouts occur exactly once upon claim resolution"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
