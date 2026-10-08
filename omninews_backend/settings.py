@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from datetime import timedelta  # 1. Added timedelta import here
+from datetime import timedelta
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -27,6 +27,7 @@ INSTALLED_APPS = [
     # Third-party apps
     'rest_framework',
     'corsheaders',
+    'drf_spectacular',
 
     # Local apps
     'users',
@@ -63,7 +64,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'omninews_backend.wsgi.application'
 
-# Database connection to MySQL (XAMPP omninews)
+# Database connection to MySQL / MariaDB (XAMPP omninews)
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
@@ -106,11 +107,12 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticatedOrReadOnly',
     ),
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
 }
 
-# 2. Added SIMPLE_JWT configuration block:
+# SimpleJWT configuration
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(days=1),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
@@ -119,7 +121,17 @@ SIMPLE_JWT = {
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 
-CORS_ALLOW_ALL_ORIGINS = True
+# CORS Configuration
+raw_cors = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
+CORS_ALLOWED_ORIGINS = [origin.strip() for origin in raw_cors.split(",") if origin.strip()]
+
+# Swagger / OpenAPI Settings
+SPECTACULAR_SETTINGS = {
+    "TITLE": "OmniNews API",
+    "DESCRIPTION": "Community-moderated news platform API.",
+    "VERSION": "0.1.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+}
 
 # Celery Configuration
 CELERY_BROKER_URL = 'redis://127.0.0.1:6379/0'
@@ -133,6 +145,6 @@ CELERY_TIMEZONE = TIME_ZONE
 CELERY_BEAT_SCHEDULE = {
     'fetch-news-every-10-minutes': {
         'task': 'news.tasks.ingest_rss_feeds',
-        'schedule': 600.0,  # Runs every 600 seconds (10 minutes)
+        'schedule': 600.0,
     },
 }

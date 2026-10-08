@@ -1,13 +1,16 @@
 from datetime import timedelta
-from django.contrib.auth.models import AbstractUser
-from django.utils import timezone
+
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError
-from rest_framework.test import APITestCase
+from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status
+from rest_framework.test import APITestCase
 
-from news.models import Article, Source, Genre, Region, ClarificationClaim, ClaimVote
-from news.scoring import should_clarify, resolve_claim_if_ready
+from news.models import (
+    Article, Bookmark, ClarificationClaim, ClaimVote, Genre, Region, Source,
+)
+from news.scoring import resolve_claim_if_ready, should_clarify
 
 User = get_user_model()
 
@@ -283,3 +286,60 @@ class ClaimAPIEndpointTestCase(APITestCase):
         response = self.client.post(url, {"value": 5}, format="json")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(ClaimVote.objects.count(), 0)
+
+class ProfileAndBookmarkTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="test_reporter", password="password123")
+        self.source = Source.objects.create(name="Daily Tech", url="https://dailytech.example.com")
+        self.region = Region.objects.create(name="Bengal", code="BEN")
+        self.genre = Genre.objects.create(name="Tech")
+
+        self.article = Article.objects.create(
+            title="Sample Automated Article",
+            body="Article body testing content.",
+            url="https://dailytech.example.com/sample-article-1",
+            source=self.source,
+            genre=self.genre,
+            region=self.region,
+            published_at=timezone.now(),
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def test_get_user_profile_stats(self):
+        url = reverse("user-profile")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["username"], "test_reporter")
+        self.assertEqual(response.data["claims_submitted_count"], 0)
+        self.assertEqual(response.data["votes_cast_count"], 0)
+
+    def test_bookmark_lifecycle(self):
+        # 1. Create Bookmark
+        create_url = reverse("user-bookmarks")
+        post_response = self.client.post(create_url, {"article": self.article.id}, format="json")
+        self.assertEqual(post_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Bookmark.objects.filter(user=self.user).count(), 1)
+
+        # 2. List Bookmarks
+        list_response = self.client.get(create_url)
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+
+        # 3. Delete Bookmark
+        delete_url = reverse("bookmark-delete", kwargs={"article_id": self.article.id})
+        delete_response = self.client.delete(delete_url)
+        self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(Bookmark.objects.filter(user=self.user).count(), 0) 
+    
+    def test_duplicate_bookmark_returns_400(self):
+        url = reverse("user-bookmarks")
+        self.client.post(url, {"article": self.article.id}, format="json")
+        res = self.client.post(url, {"article": self.article.id}, format="json")
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(Bookmark.objects.filter(user=self.user).count(), 1)      
+
+    def test_user_cannot_edit_own_karma(self):
+        url = reverse("user-profile")
+        self.client.patch(url, {"karma": 9999, "is_fact_checker": True}, format="json")
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.karma, 0)
+        self.assertFalse(self.user.is_fact_checker)

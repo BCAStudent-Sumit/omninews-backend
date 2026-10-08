@@ -2,13 +2,17 @@ from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from django.db import transaction
 from rest_framework.exceptions import PermissionDenied
-from django.db.models import Case, When, Value, IntegerField, F
-from .models import Article, Genre, ClarificationClaim, ClaimVote
+from django.db.models import Case, When, Value, IntegerField, F, Prefetch
+from rest_framework.views import APIView
+from drf_spectacular.utils import extend_schema
+from .models import Article, Genre, ClarificationClaim, ClaimVote, Bookmark
 from .serializers import (
     ArticleSerializer,
     GenreSerializer,
     ClarificationClaimSerializer,
     ClaimVoteSerializer,
+    NewsUserProfileSerializer,
+    BookmarkSerializer,
 )
 from .scoring import resolve_claim_if_ready
 
@@ -40,9 +44,22 @@ class FeedView(generics.ListAPIView):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = Article.objects.all()
 
-        # Query parameter filters
+        # Prefetch only active badge claims, and select_related author to kill N+1 queries
+        active_claims_prefetch = Prefetch(
+            "claims",
+            queryset=ClarificationClaim.objects.filter(is_active_badge=True)
+            .select_related("author")
+            .prefetch_related("evidence_links"),
+            to_attr="prefetched_active_claims",
+        )
+
+        queryset = (
+            Article.objects
+            .select_related("genre", "region", "source")
+            .prefetch_related(active_claims_prefetch)
+        )
+
         genre_id = self.request.query_params.get("genre")
         region_id = self.request.query_params.get("region")
         clarify_status = self.request.query_params.get("clarify_status")
@@ -54,29 +71,32 @@ class FeedView(generics.ListAPIView):
         if clarify_status:
             queryset = queryset.filter(clarify_status=clarify_status)
 
-        # 1. Raw feed with '-id' tiebreaker
         if getattr(user, "raw_feed", False):
             return queryset.order_by("-published_at", "-id")
 
-        # Retrieve user preferences
         user_genres = user.genres.all()
         user_region = getattr(user, "home_region", None)
 
-        # 2. Dynamic scoring: +2 for preferred genre, +1 for home region
+        # Region-safe check: prevents boosting null-region articles for users without a home region
+        if user_region is not None:
+            region_score = Case(
+                When(region=user_region, then=Value(1)),
+                default=Value(0),
+                output_field=IntegerField(),
+            )
+        else:
+            region_score = Value(0, output_field=IntegerField())
+
         return queryset.annotate(
             genre_score=Case(
                 When(genre__in=user_genres, then=Value(2)),
                 default=Value(0),
                 output_field=IntegerField(),
             ),
-            region_score=Case(
-                When(region=user_region, then=Value(1)),
-                default=Value(0),
-                output_field=IntegerField(),
-            ),
+            region_score=region_score,
             total_score=F("genre_score") + F("region_score"),
         ).order_by("-total_score", "-published_at", "-id")
-
+    
 class ArticleClaimListCreateView(generics.ListCreateAPIView):
     """
     GET: List all community claims and attached evidence for a specific article.
@@ -133,3 +153,38 @@ class CastClaimVoteView(generics.GenericAPIView):
             },
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )
+
+class UserProfileView(generics.RetrieveUpdateAPIView):
+    serializer_class = NewsUserProfileSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_object(self):
+        return self.request.user
+
+
+class BookmarkListCreateView(generics.ListCreateAPIView):
+    """
+    GET: List all bookmarked articles for the logged-in user.
+    POST: Bookmark an article (send {"article": <article_id>}).
+    """
+    serializer_class = BookmarkSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return Bookmark.objects.filter(user=self.request.user).select_related("article")
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+
+class BookmarkDeleteView(APIView):
+    """
+    DELETE: Remove a bookmark by article ID.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    @extend_schema(request=None, responses={204: None})
+    def delete(self, request, article_id):
+        bookmark = generics.get_object_or_404(Bookmark, user=request.user, article_id=article_id)
+        bookmark.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
