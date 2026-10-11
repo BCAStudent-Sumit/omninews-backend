@@ -36,6 +36,8 @@ class ClarificationClaimSerializer(serializers.ModelSerializer):
     evidence_urls = serializers.ListField(
         child=serializers.URLField(), write_only=True, required=False
     )
+    agree_count = serializers.SerializerMethodField()
+    disagree_count = serializers.SerializerMethodField()
 
     class Meta:
         model = ClarificationClaim
@@ -46,11 +48,19 @@ class ClarificationClaimSerializer(serializers.ModelSerializer):
             "author_username",
             "text",
             "is_active_badge",
+            "agree_count",
+            "disagree_count",
             "evidence_links",
             "evidence_urls",
             "created_at",
         ]
         read_only_fields = ["id", "article", "author", "is_active_badge", "created_at"]
+
+    def get_agree_count(self, obj) -> int:
+        return sum(1 for vote in obj.votes.all() if vote.value == 1)
+
+    def get_disagree_count(self, obj) -> int:
+        return sum(1 for vote in obj.votes.all() if vote.value == -1)
 
     def create(self, validated_data):
         evidence_urls = validated_data.pop("evidence_urls", [])
@@ -62,7 +72,6 @@ class ClarificationClaimSerializer(serializers.ModelSerializer):
             Evidence.objects.bulk_create(evidence_objects)
 
         return claim
-
 
 class ClaimVoteSerializer(serializers.ModelSerializer):
     class Meta:

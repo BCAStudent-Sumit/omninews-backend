@@ -21,4 +21,3 @@ local_settings.py
 # Celery Beat runtime files
 celerybeat-schedule*
 schema.yml
-schema.yml
