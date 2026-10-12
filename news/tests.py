@@ -269,6 +269,43 @@ class ClaimAPIEndpointTestCase(APITestCase):
         self.assertEqual(ClarificationClaim.objects.count(), 1)
         self.assertEqual(self.article.claims.first().evidence_links.count(), 1)
 
+    def test_claim_list_shows_agree_and_disagree_counts(self):
+        claim = ClarificationClaim.objects.create(
+            article=self.article,
+            author=self.other_user,
+            text="Claim used for counting votes.",
+        )
+        voters = [
+            User.objects.create_user(username=f"count_voter_{i}", password="password123")
+            for i in range(3)
+        ]
+        ClaimVote.objects.create(claim=claim, user=voters[0], value=1)
+        ClaimVote.objects.create(claim=claim, user=voters[1], value=1)
+        ClaimVote.objects.create(claim=claim, user=voters[2], value=-1)
+
+        url = f"/api/news/articles/{self.article.id}/claims/"
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data["results"] if isinstance(response.data, dict) else response.data
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]["agree_count"], 2)
+        self.assertEqual(data[0]["disagree_count"], 1)
+
+    def test_user_cannot_fake_vote_counts_when_creating_claim(self):
+        url = f"/api/news/articles/{self.article.id}/claims/"
+        payload = {
+            "text": "Trying to cheat the counts.",
+            "evidence_urls": ["https://primarysource.org/doc2"],
+            "agree_count": 99,
+            "disagree_count": 99,
+        }
+        response = self.client.post(url, payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["agree_count"], 0)
+        self.assertEqual(response.data["disagree_count"], 0)
+
     def test_author_cannot_vote_on_own_claim(self):
         claim = ClarificationClaim.objects.create(
             article=self.article, author=self.user, text="My own claim"
