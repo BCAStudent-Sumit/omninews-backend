@@ -241,7 +241,8 @@ class ClarifyBadgeIntegrationTestCase(APITestCase):
         voter = User.objects.create_user(username="bad_value_voter", karma=10)
         with self.assertRaises(IntegrityError):
             ClaimVote.objects.create(claim=self.claim, user=voter, value=5)
-            
+
+
 class ClaimAPIEndpointTestCase(APITestCase):
     """API endpoint tests for submitting claims and voting."""
 
@@ -303,8 +304,24 @@ class ClaimAPIEndpointTestCase(APITestCase):
         response = self.client.post(url, payload, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(ClarificationClaim.objects.count(), 1)
+        self.assertEqual(self.article.claims.first().text, "Trying to cheat the counts.")
         self.assertEqual(response.data["agree_count"], 0)
         self.assertEqual(response.data["disagree_count"], 0)
+
+    def test_claims_are_listed_oldest_first(self):
+        first = ClarificationClaim.objects.create(
+            article=self.article, author=self.other_user, text="First claim"
+        )
+        second = ClarificationClaim.objects.create(
+            article=self.article, author=self.other_user, text="Second claim"
+        )
+
+        response = self.client.get(f"/api/news/articles/{self.article.id}/claims/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data["results"] if isinstance(response.data, dict) else response.data
+        self.assertEqual([claim["id"] for claim in data], [first.id, second.id])
 
     def test_author_cannot_vote_on_own_claim(self):
         claim = ClarificationClaim.objects.create(
@@ -323,6 +340,7 @@ class ClaimAPIEndpointTestCase(APITestCase):
         response = self.client.post(url, {"value": 5}, format="json")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(ClaimVote.objects.count(), 0)
+
 
 class ProfileAndBookmarkTests(APITestCase):
     def setUp(self):
@@ -365,14 +383,14 @@ class ProfileAndBookmarkTests(APITestCase):
         delete_url = reverse("bookmark-delete", kwargs={"article_id": self.article.id})
         delete_response = self.client.delete(delete_url)
         self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
-        self.assertEqual(Bookmark.objects.filter(user=self.user).count(), 0) 
-    
+        self.assertEqual(Bookmark.objects.filter(user=self.user).count(), 0)
+
     def test_duplicate_bookmark_returns_400(self):
         url = reverse("user-bookmarks")
         self.client.post(url, {"article": self.article.id}, format="json")
         res = self.client.post(url, {"article": self.article.id}, format="json")
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(Bookmark.objects.filter(user=self.user).count(), 1)      
+        self.assertEqual(Bookmark.objects.filter(user=self.user).count(), 1)
 
     def test_user_cannot_edit_own_karma(self):
         url = reverse("user-profile")

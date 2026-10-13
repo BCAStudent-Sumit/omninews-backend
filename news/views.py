@@ -106,8 +106,11 @@ class ArticleClaimListCreateView(generics.ListCreateAPIView):
     serializer_class = ClarificationClaimSerializer
 
     def get_queryset(self):
-        return ClarificationClaim.objects.filter(
-            article_id=self.kwargs['article_id']
+        return (
+            ClarificationClaim.objects.filter(article_id=self.kwargs['article_id'])
+            .select_related('author')
+            .prefetch_related('evidence_links', 'votes')
+            .order_by('created_at', 'id')
         ).prefetch_related('evidence_links')
 
     def perform_create(self, serializer):
