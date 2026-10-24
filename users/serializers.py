@@ -33,6 +33,8 @@ class UserProfileSerializer(serializers.ModelSerializer):
     publisher_source_id = serializers.IntegerField(source="publisher_source.id", read_only=True)
     publisher_source_name = serializers.CharField(source="publisher_source.name", read_only=True)
     is_publisher = serializers.BooleanField(read_only=True)
+    is_staff = serializers.BooleanField(read_only=True)
+    is_superuser = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = User
@@ -40,5 +42,6 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'id', 'username', 'email', 'genres', 'home_region', 'raw_feed',
             'preferred_languages', 'preferred_city',
             'is_publisher', 'publisher_source_id', 'publisher_source_name',
+            'is_staff', 'is_superuser',
         )
-        read_only_fields = ('id', 'username', 'email', 'is_publisher', 'publisher_source_id', 'publisher_source_name')
+        read_only_fields = ('id', 'username', 'email', 'is_publisher', 'publisher_source_id', 'publisher_source_name', 'is_staff', 'is_superuser')
