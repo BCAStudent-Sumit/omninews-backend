@@ -11,3 +11,14 @@ class User(AbstractUser):
     )
     genres = models.ManyToManyField("news.Genre", blank=True, related_name="followers")
     raw_feed = models.BooleanField(default=False)  # the 'Raw' toggle from your doc
+    preferred_languages = models.CharField(max_length=255, default="en,hi", blank=True)
+    preferred_city = models.CharField(max_length=100, default="", blank=True)
+    publisher_source = models.ForeignKey(
+        "news.Source", null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="publishers",
+        help_text="The news provider company this account belongs to (e.g. BBC News, Times of India)."
+    )
+
+    @property
+    def is_publisher(self) -> bool:
+        return self.publisher_source is not None

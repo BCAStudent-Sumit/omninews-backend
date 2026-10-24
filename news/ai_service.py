@@ -1,0 +1,827 @@
+import os
+import re
+import json
+import logging
+import urllib.request
+import urllib.parse
+from html import unescape
+import concurrent.futures
+from django.conf import settings
+
+logger = logging.getLogger(__name__)
+
+try:
+    from google import genai
+    from google.genai import types
+    HAS_GENAI_LIB = True
+except Exception:
+    HAS_GENAI_LIB = False
+
+_TRANSLATION_CACHE = {}
+_AI_ASSISTANCE_CACHE = {}
+
+# Mapping from standard language codes to TTS and display metadata
+LANGUAGE_CONFIG = {
+    'en': {
+        'name': 'English',
+        'locale': 'en-US',
+        'greeting': 'Hello, here is your OmniNews AI briefing.',
+        'headline_intro': "Today's top story:",
+        'body_intro': 'Reporting details indicate that',
+        'signoff': 'Stay tuned with OmniNews for verified updates. Thank you.',
+    },
+    'en_in': {
+        'name': 'English (India)',
+        'locale': 'en-IN',
+        'greeting': 'Hello, here is your OmniNews India AI briefing.',
+        'headline_intro': "Top national & regional dispatch:",
+        'body_intro': 'In detail,',
+        'signoff': 'Stay tuned with OmniNews for live verified coverage. Thank you.',
+    },
+    'bn': {
+        'name': 'Bengali (বাংলা)',
+        'locale': 'bn-IN',
+        'greeting': 'নমস্কার। ওমনিনিউজ এআই সংবাদ বুলেটিনে আপনাকে স্বাগত।',
+        'headline_intro': 'আজকের প্রধান খবর:',
+        'body_intro': 'বিস্তারিত প্রতিবেদনে জানা গেছে,',
+        'signoff': 'খবরের নির্ভরযোগ্য ও তাৎক্ষণিক আপডেটের জন্য ওমনিনিউজের সঙ্গেই থাকুন। ধন্যবাদ।',
+    },
+    'bn_in': {
+        'name': 'Bengali (West Bengal / India)',
+        'locale': 'bn-IN',
+        'greeting': 'নমস্কার। ওমনিনিউজ এআই বিশেষ সংবাদে আপনাকে স্বাগত।',
+        'headline_intro': 'আজকের প্রধান খবর:',
+        'body_intro': 'প্রতিবেদন অনুযায়ী,',
+        'signoff': 'সত্য ও তথ্যনিষ্ঠ খবরের জন্য ওমনিনিউজ সঙ্গে রাখুন। ধন্যবাদ।',
+    },
+    'bn_bd': {
+        'name': 'Bengali (Bangladesh)',
+        'locale': 'bn-BD',
+        'greeting': 'আসসালামু আলাইকুম ও শুভেচ্ছা। ওমনিনিউজ এআই সংবাদ বুলেটিনে আপনাকে স্বাগতম।',
+        'headline_intro': 'আজকের শীর্ষ সংবাদ:',
+        'body_intro': 'প্রতিবেদনে জানা গেছে,',
+        'signoff': 'সর্বশেষ তথ্যের জন্য ওমনিনিউজ সঙ্গেই রাখুন। ধন্যবাদ।',
+    },
+    'hi': {
+        'name': 'Hindi (हिंदी)',
+        'locale': 'hi-IN',
+        'greeting': 'नमस्ते, यह आपका ओमनीन्यूज़ एআই बुलेटिन है।',
+        'headline_intro': 'आज की मुख्य खबर:',
+        'body_intro': 'विस्तृत रिपोर्ट के अनुसार,',
+        'signoff': 'ताज़ा और सटीक खबरों के लिए ओमनीन्यूज़ देखते रहें। धन्यवाद।',
+    },
+    'mr': {'name': 'Marathi', 'locale': 'mr-IN', 'greeting': 'नमस्कार, हे तुमचे ऑम्नीन्यूज एआय बुलेटिन आहे.'},
+    'te': {'name': 'Telugu', 'locale': 'te-IN', 'greeting': 'నమస్కారం, ఇది మీ ఓమ్నిన్యూస్ AI వార్తా సారాంశం.'},
+    'ta': {'name': 'Tamil', 'locale': 'ta-IN', 'greeting': 'வணக்கம், இது உங்கள் ஆம்னிநியூஸ் AI செய்தி தொகுப்பு.'},
+    'gu': {'name': 'Gujarati', 'locale': 'gu-IN', 'greeting': 'નમસ્તે, આ તમારું ઓમ્નીન્યૂઝ એઆઈ બુલેટિન છે.'},
+    'ur': {'name': 'Urdu', 'locale': 'ur-IN', 'greeting': 'السلام علیکم، یہ آپ کا اومنی نیوز اے آئی بلیٹن ہے۔'},
+    'kn': {'name': 'Kannada', 'locale': 'kn-IN', 'greeting': 'ನಮಸ್ಕಾರ, ಇದು ನಿಮ್ಮ ಓಮ್ನಿನಿವ್ಸ್ AI ಬುಲೆಟಿನ್.'},
+    'ml': {'name': 'Malayalam', 'locale': 'ml-IN', 'greeting': 'നമസ്കാരം, ഇതാണ് നിങ്ങളുടെ ഓംനിന്യൂസ് AI ബുള്ളറ്റിൻ.'},
+    'pa': {'name': 'Punjabi', 'locale': 'pa-IN', 'greeting': 'ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ, ਇਹ ਤੁਹਾਡਾ ਓਮਨੀਨਿਊਜ਼ ਏਆਈ ਬੁਲੇਟਿਨ ਹੈ।'},
+    'es': {'name': 'Spanish', 'locale': 'es-ES', 'greeting': 'Hola, este es su boletín informativo OmniNews AI.'},
+    'fr': {'name': 'French', 'locale': 'fr-FR', 'greeting': 'Bonjour, voici votre bulletin d\'information OmniNews AI.'},
+    'de': {'name': 'German', 'locale': 'de-DE', 'greeting': 'Guten Tag, hier ist Ihr OmniNews KI-Nachrichtenüberblick.'},
+    'ja': {'name': 'Japanese', 'locale': 'ja-JP', 'greeting': 'こんにちは、OmniNews AIニュースブリーフィングです。'},
+    'ar': {'name': 'Arabic', 'locale': 'ar-SA', 'greeting': 'مرحباً، إليكم موجز أومني نيوز للذكاء الاصطناعي.'},
+    'ru': {'name': 'Russian', 'locale': 'ru-RU', 'greeting': 'Здравствуйте, это ваш выпуск новостей OmniNews AI.'},
+    'zh': {'name': 'Chinese', 'locale': 'zh-CN', 'greeting': '您好，这是您的 OmniNews AI 新闻简报。'},
+    'pt': {'name': 'Portuguese', 'locale': 'pt-PT', 'greeting': 'Olá, este é o seu boletim de notícias OmniNews AI.'},
+    'ko': {'name': 'Korean', 'locale': 'ko-KR', 'greeting': '안녕하세요, 옴니뉴스 AI 뉴스 브리핑입니다.'},
+}
+
+# Specialized phonetic mappings for Bengali news TTS pronunciation
+BENGALI_ACRONYMS = {
+    r'\bISRO\b': 'ইসরো',
+    r'\bNASA\b': 'নাসা',
+    r'\bAI\b': 'এআই',
+    r'\bPM\b': 'প্রধানমন্ত্রী',
+    r'\bCM\b': 'মুখ্যমন্ত্রী',
+    r'\bIPL\b': 'আইপিএল',
+    r'\bBCCI\b': 'বিসিসিআই',
+    r'\bICC\b': 'আইসিসি',
+    r'\bUN\b': 'জাতিসংঘ',
+    r'\bUNO\b': 'জাতিসংঘ',
+    r'\bWHO\b': 'বিশ্ব স্বাস্থ্য সংস্থা',
+    r'\bRBI\b': 'আরবিআই',
+    r'\bBJP\b': 'বিজেপি',
+    r'\bTMC\b': 'তৃণমূল কংগ্রেস',
+    r'\bCPIM\b': 'সিপিআইএম',
+    r'\bUSA\b': 'যুক্তরাষ্ট্র',
+    r'\bUS\b': 'মার্কিন যুক্তরাষ্ট্র',
+    r'\bUK\b': 'যুক্তরাজ্য',
+    r'\bEU\b': 'ইউরোপীয় ইউনিয়ন',
+    r'\bCOVID\b': 'কোভিড',
+    r'\bCOVID-19\b': 'কোভিড-১৯',
+    r'\bCEO\b': 'সিইও',
+    r'\bGDP\b': 'জিডিপি',
+    r'\bIT\b': 'আইটি',
+    r'\bDr\b\.?': 'ডক্টর',
+    r'\bProf\b\.?': 'অধ্যাপক',
+    r'\bvs\b\.?': 'বনাম',
+    r'\bPTI\b': 'পিটিআই',
+    r'\bANI\b': 'এএনআই',
+}
+
+BENGALI_LATIN_DIGITS = {
+    '0': '০', '1': '১', '2': '২', '3': '৩', '4': '৪',
+    '5': '৫', '6': '৬', '7': '৭', '8': '৮', '9': '৯'
+}
+
+
+def clean_html(text: str) -> str:
+    """Removes HTML markup and cleans excessive whitespace."""
+    if not text:
+        return ""
+    text = unescape(text)
+    text = re.sub(r'<[^>]+>', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
+def clean_bengali_text_for_speech(text: str) -> str:
+    """
+    Rhythm & phonetic optimizer for Bengali text-to-speech.
+    Converts English acronyms to Bengali script, converts numerals, replaces periods
+    with Bengali Dari (।), and inserts natural breath pauses for speech synthesis.
+    """
+    if not text:
+        return ""
+
+    # Replace English acronyms with Bengali phonetic equivalents
+    for pat, rep in BENGALI_ACRONYMS.items():
+        text = re.sub(pat, rep, text, flags=re.IGNORECASE)
+
+    # Convert Latin numerals into Bengali numerals
+    text = re.sub(r'\b\d+\b', lambda m: ''.join(BENGALI_LATIN_DIGITS.get(d, d) for d in m.group(0)), text)
+
+    # Convert English periods to Bengali Dari '।'
+    text = re.sub(r'\.\s*', '। ', text)
+
+    # Ensure clean spacing after punctuation
+    text = re.sub(r'([।,?])(?=[^\s])', r'\1 ', text)
+
+    # Clean multiple consecutive daris
+    text = re.sub(r'।\s*।+', '।', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
+def translate_text(text: str, target_lang: str) -> str:
+    """
+    Translates text to target language code using reliable translation endpoint.
+    Falls back to original text on network timeout.
+    """
+    if not text or target_lang in ('en', 'en_in'):
+        return text
+
+    # Extract base 2-letter language code if locale supplied (e.g. 'bn-IN' -> 'bn')
+    tl = target_lang.split('-')[0].split('_')[0].lower()
+    cleaned = text.strip()
+    cache_key = (cleaned, tl)
+    if cache_key in _TRANSLATION_CACHE:
+        return _TRANSLATION_CACHE[cache_key]
+
+    # Limit chunk size to prevent request url overflow
+    text_to_translate = cleaned[:2000]
+
+    try:
+        encoded = urllib.parse.quote(text_to_translate)
+        url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={tl}&dt=t&q={encoded}"
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"}
+        )
+        with urllib.request.urlopen(req, timeout=4) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            if payload and isinstance(payload, list) and len(payload) > 0 and isinstance(payload[0], list):
+                translated_parts = [segment[0] for segment in payload[0] if segment and len(segment) > 0 and segment[0]]
+                res = "".join(translated_parts)
+                if res and res.strip():
+                    _TRANSLATION_CACHE[cache_key] = res
+                    return res
+    except Exception:
+        pass
+    return text
+
+
+def translate_batch(texts: list, target_lang: str) -> list:
+    """
+    Translates multiple strings in parallel using a thread pool.
+    Results are cached to minimize redundant network round trips.
+    """
+    if not texts or target_lang in ('en', 'en_in'):
+        return list(texts)
+
+    tl = target_lang.split('-')[0].split('_')[0].lower()
+    results = [None] * len(texts)
+    to_fetch = []
+
+    for idx, t in enumerate(texts):
+        key = (t.strip() if t else "", tl)
+        if key in _TRANSLATION_CACHE:
+            results[idx] = _TRANSLATION_CACHE[key]
+        else:
+            to_fetch.append((idx, t))
+
+    if not to_fetch:
+        return results
+
+    def _worker(item):
+        idx, original = item
+        trans = translate_text(original, tl)
+        return idx, trans
+
+    max_w = min(len(to_fetch), 8)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
+        for idx, trans in executor.map(_worker, to_fetch):
+            results[idx] = trans
+
+    return results
+
+
+def extract_key_sentences(text: str, max_sentences: int = 4) -> list:
+    """Extracts top informative sentences based on length and relevance."""
+    raw_sentences = re.split(r'(?<=[.!?])\s+', text)
+    valid_sentences = [
+        s.strip() for s in raw_sentences
+        if len(s.strip()) > 30 and not s.strip().startswith(('Click', 'Read', 'Subscribe', 'Photo:', 'Follow us'))
+    ]
+
+    if not valid_sentences:
+        valid_sentences = [s.strip() for s in raw_sentences if s.strip()]
+
+    return valid_sentences[:max_sentences]
+
+
+def answer_question_from_context(question: str, title: str, body: str, target_lang: str) -> str:
+    """Answers a user question contextually from the article body with natural language framing."""
+    q_lower = question.lower()
+    sentences = re.split(r'(?<=[.!?])\s+', body)
+
+    # Keywords from question
+    q_words = [w for w in re.findall(r'\b[a-zA-Z0-9]{3,}\b', q_lower) if w not in ('what', 'when', 'where', 'which', 'who', 'how', 'why', 'this', 'that', 'with', 'from')]
+
+    best_match = None
+    best_score = 0
+
+    for s in sentences:
+        s_clean = s.strip()
+        if len(s_clean) < 20:
+            continue
+        score = sum(1 for w in q_words if w in s_clean.lower())
+        if score > best_score:
+            best_score = score
+            best_match = s_clean
+
+    if best_match and best_score > 0:
+        ans_en = best_match
+    else:
+        first_s = sentences[0].strip() if sentences else title
+        ans_en = first_s
+
+    if target_lang.startswith('bn'):
+        # Bengali enhanced Q&A framing
+        translated_ans = clean_bengali_text_for_speech(translate_text(ans_en, 'bn'))
+        return f"ওমনিনিউজের বিশেষ প্রতিবেদন অনুসারে: {translated_ans}"
+    elif target_lang not in ('en', 'en_in'):
+        translated_ans = translate_text(ans_en, target_lang)
+        return translated_ans
+
+    return f"Based on the verified reporting: {ans_en}"
+
+
+def get_gemini_api_key(passed_key: str = None) -> str:
+    """Returns the active Gemini API key from parameter, Django settings, or environment."""
+    if passed_key and passed_key.strip():
+        return passed_key.strip()
+    key = getattr(settings, "GEMINI_API_KEY", "") or os.environ.get("GEMINI_API_KEY", "") or os.environ.get("GOOGLE_API_KEY", "")
+    return (key or "").strip()
+
+
+def get_gemini_model(passed_model: str = None) -> str:
+    """Returns the configured Gemini model name."""
+    if passed_model and passed_model.strip():
+        return passed_model.strip()
+    return getattr(settings, "GEMINI_MODEL", "") or os.environ.get("GEMINI_MODEL", "gemini-flash-lite-latest")
+
+
+def get_gemini_status() -> dict:
+    """Returns real-time status of the Gemini AI integration."""
+    key = get_gemini_api_key()
+    has_key = bool(key and len(key) >= 10)
+    masked_key = f"{key[:4]}...{key[-4:]}" if has_key else ""
+    model = get_gemini_model()
+    return {
+        "has_gemini_key": has_key,
+        "masked_key": masked_key,
+        "model": model,
+        "provider": f"Google Gemini ({model})" if has_key else "OmniAI Neural Engine",
+        "supported_models": [
+            "gemini-flash-lite-latest",
+            "gemini-3.5-flash-lite",
+            "gemini-flash-latest",
+            "gemini-3.8-flash",
+            "gemini-pro-latest",
+        ],
+        "status": "ready" if has_key else "fallback_active",
+        "sdk_available": HAS_GENAI_LIB,
+    }
+
+
+def _update_env_file(key: str, value: str):
+    """Safely updates or appends a key-value pair in .env."""
+    try:
+        base_dir = getattr(settings, "BASE_DIR", None)
+        if not base_dir:
+            return
+        file_path = os.path.join(base_dir, ".env")
+        lines = []
+        if os.path.exists(file_path):
+            with open(file_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        found = False
+        new_lines = []
+        for line in lines:
+            if line.startswith(f"{key}="):
+                new_lines.append(f"{key}={value}\n")
+                found = True
+            else:
+                new_lines.append(line)
+        if not found:
+            new_lines.append(f"{key}={value}\n")
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.writelines(new_lines)
+    except Exception as e:
+        logger.warning(f"Failed to update .env: {e}")
+
+
+def _call_gemini_rest(prompt: str, system_instruction: str, api_key: str, model: str) -> str:
+    """Zero-dependency direct REST fallback to Gemini API."""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.2,
+            "responseMimeType": "application/json"
+        }
+    }
+    if system_instruction:
+        payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=25) as resp:
+        result = json.loads(resp.read().decode("utf-8"))
+        candidates = result.get("candidates", [])
+        if candidates:
+            parts = candidates[0].get("content", {}).get("parts", [])
+            if parts:
+                return parts[0].get("text", "")
+    return None
+
+
+def test_gemini_key(api_key: str, model: str = None) -> dict:
+    """
+    Validates a Google Gemini API key.
+    Tests the requested model and automatically tries candidate models if the chosen one returns 404/NOT_FOUND.
+    """
+    if not api_key or len(api_key.strip()) < 10:
+        return {"success": False, "error": "API key appears too short or invalid."}
+    key = api_key.strip()
+
+    requested_model = (model or get_gemini_model()).strip()
+    candidates = [
+        requested_model,
+        "gemini-flash-lite-latest",
+        "gemini-3.5-flash-lite",
+        "gemini-flash-latest",
+        "gemini-3.8-flash",
+        "gemini-pro-latest",
+    ]
+    # Deduplicate while preserving order
+    seen = set()
+    models_to_try = [m for m in candidates if not (m in seen or seen.add(m))]
+
+    last_error = None
+
+    if HAS_GENAI_LIB:
+        try:
+            http_opts = types.HttpOptions(timeout=10000) if hasattr(types, "HttpOptions") else None
+            client = genai.Client(api_key=key, http_options=http_opts)
+
+            # Discover all models available to this specific key
+            discovered = []
+            try:
+                for m in client.models.list():
+                    short_name = (m.name or "").replace("models/", "")
+                    if "gemini" in short_name.lower():
+                        discovered.append(short_name)
+            except Exception as e:
+                logger.info(f"Could not list models: {e}")
+
+            if discovered:
+                # Prioritize valid discovered models
+                in_disc = [m for m in models_to_try if m in discovered]
+                other_disc = [m for m in discovered if m not in in_disc]
+                models_to_try = in_disc + other_disc + [m for m in models_to_try if m not in discovered]
+
+            for target_model in models_to_try:
+                try:
+                    response = client.models.generate_content(
+                        model=target_model,
+                        contents='Reply in JSON: {"status": "ok"}',
+                        config=types.GenerateContentConfig(response_mime_type="application/json"),
+                    )
+                    if response and response.text:
+                        return {
+                            "success": True,
+                            "model": target_model,
+                            "supported_models": discovered or models_to_try,
+                        }
+                except Exception as e:
+                    last_error = str(e)
+                    # If model not found (404), try next candidate model!
+                    if "404" in last_error or "NOT_FOUND" in last_error or "no longer available" in last_error:
+                        continue
+                    # If key was blocked or leaked
+                    if "ACCESS_TOKEN_TYPE_UNSUPPORTED" in last_error or "API_KEY_SERVICE_BLOCKED" in last_error:
+                        return {
+                            "success": False,
+                            "error": "This key was disabled by Google's automated leaked-key security system (because it was visible in a screenshot). Please delete it in Google AI Studio, create a new key, and paste it directly without sharing."
+                        }
+                    # If key itself is invalid (400), return immediately
+                    if "API_KEY_INVALID" in last_error or "400" in last_error:
+                        return {
+                            "success": False,
+                            "error": "The Gemini API key is not valid. Please verify your key at Google AI Studio."
+                        }
+                    continue
+        except Exception as e:
+            last_error = str(e)
+
+    # REST fallback
+    for target_model in models_to_try:
+        try:
+            res = _call_gemini_rest('Reply in JSON: {"status": "ok"}', "", key, target_model)
+            if res:
+                return {"success": True, "model": target_model}
+        except Exception as e:
+            last_error = str(e)
+            if "ACCESS_TOKEN_TYPE_UNSUPPORTED" in last_error or "API_KEY_SERVICE_BLOCKED" in last_error:
+                return {
+                    "success": False,
+                    "error": "This key was disabled by Google's automated leaked-key security system (because it was visible in a screenshot). Please delete it in Google AI Studio, create a new key, and paste it directly without sharing."
+                }
+
+    return {"success": False, "error": last_error or "Failed to connect to Google Gemini API."}
+
+
+def set_gemini_api_key(api_key: str, model: str = None) -> dict:
+    """Verifies and persists a Gemini API key with automatic working model selection."""
+    clean_key = (api_key or "").strip()
+    if not clean_key:
+        os.environ["GEMINI_API_KEY"] = ""
+        setattr(settings, "GEMINI_API_KEY", "")
+        _update_env_file("GEMINI_API_KEY", "")
+        _AI_ASSISTANCE_CACHE.clear()
+        return {
+            "success": True,
+            "message": "Gemini API key cleared. Reverted to OmniAI Neural Engine.",
+            "status": get_gemini_status()
+        }
+
+    test_res = test_gemini_key(clean_key, model)
+    if not test_res.get("success"):
+        return {
+            "success": False,
+            "error": test_res.get("error", "Failed to validate Google Gemini API key.")
+        }
+
+    working_model = test_res.get("model", get_gemini_model(model))
+
+    os.environ["GEMINI_API_KEY"] = clean_key
+    setattr(settings, "GEMINI_API_KEY", clean_key)
+    _update_env_file("GEMINI_API_KEY", clean_key)
+
+    os.environ["GEMINI_MODEL"] = working_model
+    setattr(settings, "GEMINI_MODEL", working_model)
+    _update_env_file("GEMINI_MODEL", working_model)
+
+    _AI_ASSISTANCE_CACHE.clear()
+    return {
+        "success": True,
+        "message": f"Gemini API key verified & activated! Active model: {working_model}",
+        "status": get_gemini_status()
+    }
+
+
+def generate_with_gemini(
+    clean_title: str,
+    clean_body: str,
+    lang_key: str,
+    config: dict,
+    query: str = None,
+    api_key: str = None,
+    model: str = None,
+) -> dict:
+    """Calls Google Gemini API to produce high-fidelity news intelligence."""
+    key = get_gemini_api_key(api_key)
+    if not key:
+        return None
+
+    lang_name = config.get("name", "English")
+    locale = config.get("locale", "en-US")
+    greeting = config.get("greeting", "Hello, here is your OmniNews AI briefing.")
+    headline_intro = config.get("headline_intro", "Today's top story:")
+    body_intro = config.get("body_intro", "Reporting details indicate that")
+    signoff = config.get("signoff", "Stay tuned with OmniNews for verified updates. Thank you.")
+    is_bengali = lang_key.startswith("bn")
+
+    chosen_model = model or get_gemini_model()
+    models_to_try = [chosen_model]
+    for alt in [
+        "gemini-flash-lite-latest",
+        "gemini-3.5-flash-lite",
+        "gemini-flash-latest",
+        "gemini-3.8-flash",
+        "gemini-pro-latest",
+    ]:
+        if alt not in models_to_try:
+            models_to_try.append(alt)
+
+    qa_prompt = ""
+    qa_schema = ""
+    if query and query.strip():
+        qa_prompt = (
+            f'\n5. "qa_answer": Accurate and concise journalistic response answering the user\'s specific question: '
+            f'"{query.strip()}" based strictly on the article content, written in {lang_name}.'
+        )
+        qa_schema = ',\n  "qa_answer": "string"'
+
+    system_instruction = (
+        f"You are the OmniNews AI Senior Regional Anchor and Investigative Editor. "
+        f"Analyze the news article and produce a professional, authentic regional news briefing in {lang_name} ({lang_key}). "
+        f"All text must be written in natural, fluent {lang_name}. "
+        f"For voice_script, write a complete broadcast news anchor narration script formatted for Text-to-Speech audio reading. "
+        f"If {lang_name} is Bengali (বাংলা), use natural journalistic Bengali, proper Bengali Dari (।) punctuation, "
+        f"and avoid clumsy literal translations."
+    )
+
+    prompt = f"""Article Headline:
+{clean_title}
+
+Article Body:
+{clean_body[:4500] if clean_body else clean_title}
+
+Output Requirements in {lang_name}:
+1. "summary": Executive news summary (2 to 3 sentences in {lang_name}).
+2. "bullets": An array of 3 to 4 key takeaways in {lang_name}.
+3. "eli5": Simplified overview explaining the story in plain terms ("Explain Like I'm 5" in {lang_name}).
+4. "voice_script": Broadcast-ready news anchor narration script in {lang_name}. It must begin with an introduction (e.g., "{greeting} {headline_intro}"), narrate the story with clarity and context, and conclude with a sign-off ("{signoff}").{qa_prompt}
+
+You MUST reply with ONLY a valid JSON object matching this schema:
+{{
+  "summary": "string",
+  "bullets": ["string", "string", "string"],
+  "eli5": "string",
+  "voice_script": "string"{qa_schema}
+}}"""
+
+    raw_text = None
+    used_model = chosen_model
+
+    for m in models_to_try:
+        try:
+            if HAS_GENAI_LIB:
+                http_opts = types.HttpOptions(timeout=15000) if hasattr(types, "HttpOptions") else None
+                client = genai.Client(api_key=key, http_options=http_opts)
+                cfg = types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    temperature=0.2,
+                    response_mime_type="application/json",
+                )
+                response = client.models.generate_content(
+                    model=m,
+                    contents=prompt,
+                    config=cfg,
+                )
+                if response and response.text:
+                    raw_text = response.text
+                    used_model = m
+                    break
+            else:
+                raw_text = _call_gemini_rest(prompt, system_instruction, key, m)
+                if raw_text:
+                    used_model = m
+                    break
+        except Exception as e:
+            logger.warning(f"Gemini call with model {m} failed: {e}")
+            continue
+
+    if not raw_text:
+        return None
+
+    data = None
+    try:
+        data = json.loads(raw_text)
+    except Exception:
+        match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw_text, re.DOTALL)
+        if match:
+            try:
+                data = json.loads(match.group(1))
+            except Exception:
+                pass
+
+    if not data or not isinstance(data, dict):
+        return None
+
+    summary = data.get("summary", "")
+    bullets = data.get("bullets", [])
+    if isinstance(bullets, str):
+        bullets = [bullets]
+    eli5 = data.get("eli5", "")
+    voice_script = data.get("voice_script", "")
+    qa_answer = data.get("qa_answer")
+
+    if is_bengali and voice_script:
+        voice_script = clean_bengali_text_for_speech(voice_script)
+    if is_bengali and summary:
+        summary = clean_bengali_text_for_speech(summary)
+
+    return {
+        "status": "success",
+        "language": lang_key,
+        "language_name": lang_name,
+        "locale": locale,
+        "title": clean_title,
+        "summary": summary,
+        "bullets": bullets,
+        "eli5": eli5,
+        "voice_script": voice_script,
+        "qa_answer": qa_answer,
+        "provider": f"Google Gemini ({used_model})",
+        "model": used_model,
+        "is_gemini": True,
+        "is_bengali_enhanced": is_bengali,
+    }
+
+
+def generate_omni_ai_assistance(
+    title: str,
+    body: str,
+    language: str = 'en',
+    action: str = 'all',
+    query: str = None,
+    api_key: str = None,
+    model: str = None
+) -> dict:
+    """
+    Core AI news assistance engine:
+    Uses Google Gemini API when available for advanced multi-lingual summaries,
+    bullet points, broadcast narration, and interactive Q&A.
+    Seamlessly falls back to OmniAI Neural Engine when offline or without key.
+    """
+    clean_title = clean_html(title)
+    clean_body = clean_html(body)
+
+    # Normalize language code
+    lang_key = language.lower().replace('-', '_')
+    if lang_key not in LANGUAGE_CONFIG:
+        # Try 2-letter prefix
+        lang_key = lang_key.split('_')[0]
+
+    cache_key = (clean_title[:100], lang_key, action, query or "", api_key or "")
+    if cache_key in _AI_ASSISTANCE_CACHE:
+        return _AI_ASSISTANCE_CACHE[cache_key]
+
+    config = LANGUAGE_CONFIG.get(lang_key, LANGUAGE_CONFIG['en'])
+
+    # --- 1. Attempt Google Gemini Generation ---
+    gemini_key = get_gemini_api_key(api_key)
+    if gemini_key:
+        try:
+            gemini_res = generate_with_gemini(
+                clean_title=clean_title,
+                clean_body=clean_body,
+                lang_key=lang_key,
+                config=config,
+                query=query,
+                api_key=gemini_key,
+                model=model,
+            )
+            if gemini_res and gemini_res.get("status") == "success":
+                _AI_ASSISTANCE_CACHE[cache_key] = gemini_res
+                return gemini_res
+        except Exception as e:
+            logger.warning(f"Google Gemini generation encountered error, falling back to Neural Engine: {e}")
+
+    # --- 2. Fallback: OmniAI Regional Neural Engine ---
+    lang_name = config['name']
+    locale = config['locale']
+    greeting = config['greeting']
+
+    # 1. Generate English Core Extracts
+    key_sentences = extract_key_sentences(clean_body or clean_title, max_sentences=4)
+    if not key_sentences:
+        key_sentences = [clean_title]
+
+    # Executive Summary (2-3 sentences)
+    summary_en = " ".join(key_sentences[:3])
+    if len(summary_en) < 60 and clean_title not in summary_en:
+        summary_en = f"{clean_title}. {summary_en}".strip()
+
+    # Bullet Takeaways (3-4 concise points)
+    bullets_en = []
+    if key_sentences:
+        bullets_en.append(f"Headline Overview: {clean_title}")
+        for idx, s in enumerate(key_sentences[:3]):
+            if s.lower() not in clean_title.lower():
+                bullets_en.append(s)
+
+    if len(bullets_en) < 2:
+        bullets_en = [
+            f"Key Event: {clean_title}",
+            "Verified by OmniNews global dispatches.",
+            "Complete coverage available in the full article."
+        ]
+
+    # Explain Like I'm 5 (ELI5)
+    eli5_en = f"Here is the simple version: {clean_title}. In short, {key_sentences[0] if key_sentences else clean_title}."
+
+    # Conversational Voice Narration Script (tailored for natural speech synthesis)
+    voice_script_en = (
+        f"{greeting} "
+        f"Today's report: {clean_title}. "
+        f"{' '.join(key_sentences[:2])} "
+        f"This has been your OmniNews verified update."
+    )
+
+    # 2. Regional Translation & Voice Script Polish
+    is_bengali = lang_key.startswith('bn')
+
+    if lang_key in ('en', 'en_in'):
+        summary_final = summary_en
+        bullets_final = bullets_en
+        eli5_final = eli5_en
+        voice_script_final = voice_script_en
+    elif is_bengali:
+        # High-Fidelity Bengali Processing with Parallel Batch Translation
+        to_translate = [clean_title, " ".join(key_sentences[:2]), summary_en, eli5_en] + list(bullets_en)
+        trans_res = translate_batch(to_translate, 'bn')
+
+        translated_title = clean_bengali_text_for_speech(trans_res[0])
+        translated_body_brief = clean_bengali_text_for_speech(trans_res[1])
+        summary_final = clean_bengali_text_for_speech(trans_res[2])
+        eli5_raw = trans_res[3]
+        eli5_final = f"সহজ ভাষায় সংক্ষেপে: {clean_bengali_text_for_speech(eli5_raw)}"
+        bullets_final = [clean_bengali_text_for_speech(b) for b in trans_res[4:]]
+
+        headline_intro = config.get('headline_intro', 'আজকের প্রধান খবর:')
+        body_intro = config.get('body_intro', 'বিস্তারিত প্রতিবেদনে জানা গেছে,')
+        signoff = config.get('signoff', 'খবরের নির্ভরযোগ্য ও তাৎক্ষণিক আপডেটের জন্য ওমনিনিউজের সঙ্গেই থাকুন। ধন্যবাদ।')
+
+        # Construct broadcast narration script for Bengali Voice TTS
+        voice_script_final = (
+            f"{greeting} "
+            f"{headline_intro} {translated_title}। "
+            f"{body_intro} {translated_body_brief} "
+            f"{signoff}"
+        )
+        voice_script_final = clean_bengali_text_for_speech(voice_script_final)
+    else:
+        # Other regional languages in parallel batch
+        to_translate = [clean_title, " ".join(key_sentences[:2]), summary_en, eli5_en] + list(bullets_en)
+        trans_res = translate_batch(to_translate, lang_key)
+
+        translated_title = trans_res[0]
+        translated_body_brief = trans_res[1]
+        summary_final = trans_res[2]
+        eli5_final = trans_res[3]
+        bullets_final = trans_res[4:]
+        voice_script_final = f"{greeting} {translated_title}। {translated_body_brief}"
+
+    # 3. Handle Q&A if query provided
+    answer_final = None
+    if query and query.strip():
+        answer_final = answer_question_from_context(query.strip(), clean_title, clean_body, lang_key)
+
+    res_dict = {
+        "status": "success",
+        "language": lang_key,
+        "language_name": lang_name,
+        "locale": locale,
+        "title": clean_title,
+        "summary": summary_final,
+        "bullets": bullets_final,
+        "eli5": eli5_final,
+        "voice_script": voice_script_final,
+        "qa_answer": answer_final,
+        "provider": "OmniAI Bengali Neural Engine" if is_bengali else "OmniAI Neural Engine",
+        "is_bengali_enhanced": is_bengali,
+    }
+    _AI_ASSISTANCE_CACHE[cache_key] = res_dict
+    if len(_AI_ASSISTANCE_CACHE) > 500:
+        _AI_ASSISTANCE_CACHE.clear()
+    return res_dict

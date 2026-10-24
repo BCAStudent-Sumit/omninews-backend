@@ -103,6 +103,41 @@ class ArticleSerializer(serializers.ModelSerializer):
             active = obj.claims.filter(is_active_badge=True).select_related("author")
         return ClarificationClaimSerializer(active, many=True).data
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        img = data.get("image_url")
+        if img:
+            img_str = str(img).strip()
+            # If the image host does not supply open CORS headers, route via local image proxy
+            # BBC and Wikimedia already send Access-Control-Allow-Origin: *
+            if not any(open_host in img_str for open_host in ["bbci.co.uk", "wikimedia.org"]):
+                import urllib.parse
+                if "/api/news/image-proxy/?url=" in img_str:
+                    img_str = urllib.parse.unquote(img_str.split("/api/news/image-proxy/?url=")[-1])
+                request = self.context.get("request")
+                path = f"/api/news/image-proxy/?url={urllib.parse.quote(img_str)}"
+                if request:
+                    data["image_url"] = request.build_absolute_uri(path)
+                else:
+                    data["image_url"] = path
+        return data
+
+
+class ArticlePublishSerializer(serializers.ModelSerializer):
+    genre_id = serializers.PrimaryKeyRelatedField(
+        queryset=Genre.objects.all(), source="genre", required=False, allow_null=True
+    )
+    region_id = serializers.PrimaryKeyRelatedField(
+        queryset=Region.objects.all(), source="region", required=False, allow_null=True
+    )
+    url = serializers.URLField(required=False, allow_blank=True)
+    image_url = serializers.URLField(required=False, allow_blank=True)
+
+    class Meta:
+        model = Article
+        fields = ["id", "title", "body", "genre_id", "region_id", "image_url", "url", "published_at"]
+        read_only_fields = ["id", "published_at"]
+
 
 class NewsUserProfileSerializer(serializers.ModelSerializer):
     home_region_name = serializers.CharField(source="home_region.name", read_only=True)
@@ -123,6 +158,8 @@ class NewsUserProfileSerializer(serializers.ModelSerializer):
             "home_region",
             "home_region_name",
             "preferred_genres",
+            "preferred_languages",
+            "preferred_city",
             "claims_submitted_count",
             "claims_verified_count",
             "votes_cast_count",
@@ -142,10 +179,11 @@ class NewsUserProfileSerializer(serializers.ModelSerializer):
 class BookmarkSerializer(serializers.ModelSerializer):
     article_title = serializers.CharField(source="article.title", read_only=True)
     article_url = serializers.CharField(source="article.url", read_only=True)
+    article_details = ArticleSerializer(source="article", read_only=True)
 
     class Meta:
         model = Bookmark
-        fields = ["id", "article", "article_title", "article_url", "created_at"]
+        fields = ["id", "article", "article_title", "article_url", "article_details", "created_at"]
         read_only_fields = ["id", "created_at"]
 
     def validate_article(self, value):

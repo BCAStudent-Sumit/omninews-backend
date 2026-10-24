@@ -41,6 +41,7 @@ class Article(models.Model):
     language = models.CharField(max_length=5, default="en")
     published_at = models.DateTimeField()
     created_at = models.DateTimeField(auto_now_add=True)
+    image_url = models.URLField(max_length=2048, blank=True, null=True)
     clarify_status = models.CharField(
         max_length=10, choices=ClarifyStatus.choices, default=ClarifyStatus.NONE
     )
