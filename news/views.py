@@ -989,3 +989,59 @@ class MarketQuotesView(APIView):
         _CACHED_MARKET_DATA = results
         _LAST_MARKET_FETCH_TIME = now
         return Response(results, status=status.HTTP_200_OK)
+
+
+
+# Global in-memory / cache-backed live telecast broadcaster state
+_TELECAST_STATE = {
+    "is_live": False,
+    "title": "ICC T20 World Cup • IND vs AUS",
+    "sport": "Cricket",
+    "stream_url": "",
+    "viewers": "18.4K",
+}
+
+class LiveTelecastView(APIView):
+    """
+    Real-Time Global Broadcast Synchronizer
+    GET:  Publicly accessible by all consumers/viewers on all devices.
+    POST: Broadcaster Studio control (restricted to Sumit / admin / staff).
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from django.core.cache import cache
+        state = cache.get("live_telecast_state")
+        if not state:
+            state = _TELECAST_STATE
+        return Response(state, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        global _TELECAST_STATE
+        user = request.user
+        if not user or not user.is_authenticated:
+            return Response({"error": "Authentication required"}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        username = (getattr(user, 'username', '') or '').lower()
+        if not (user.is_staff or getattr(user, 'is_superuser', False) or username in ['sumit', 'admin']):
+            return Response({"error": "Only broadcaster admin can manage live telecast."}, status=status.HTTP_403_FORBIDDEN)
+
+        data = request.data or {}
+        is_live = bool(data.get("is_live", False))
+        title = str(data.get("title", "ICC T20 World Cup • IND vs AUS")).strip()
+        sport = str(data.get("sport", "Cricket")).strip()
+        stream_url = str(data.get("stream_url", "")).strip()
+        viewers = str(data.get("viewers", "18.4K")).strip()
+
+        state = {
+            "is_live": is_live,
+            "title": title,
+            "sport": sport,
+            "stream_url": stream_url,
+            "viewers": viewers,
+        }
+        _TELECAST_STATE = state
+        from django.core.cache import cache
+        cache.set("live_telecast_state", state, timeout=None)
+
+        return Response(state, status=status.HTTP_200_OK)

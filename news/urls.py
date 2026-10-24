@@ -14,8 +14,11 @@ from .views import (
     AiAssistView,
     AiStatusView,
     MarketQuotesView,
+    LiveTelecastView,
 )
+
 urlpatterns = [
+    path("telecast/", LiveTelecastView.as_view(), name="live-telecast"),
     path("markets/", MarketQuotesView.as_view(), name="market-quotes"),
     path("genres/", GenreListView.as_view(), name="genre-list"),
     path("articles/", ArticleListView.as_view(), name="article-list"),
