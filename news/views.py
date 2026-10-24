@@ -2,6 +2,8 @@ from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from django.db import transaction
 from django.http import HttpResponse
+from django.utils.decorators import method_decorator
+from django.views.decorators.cache import cache_page
 import urllib.request
 import threading
 from rest_framework.exceptions import PermissionDenied
@@ -352,6 +354,7 @@ def fetch_city_news(city, genre_obj=None, language='en'):
         _ACTIVE_CITY_FETCHES.discard(fetch_key)
 
 
+@method_decorator(cache_page(60 * 2), name='dispatch')
 class FeedView(generics.ListAPIView):
     serializer_class = ArticleSerializer
     permission_classes = [permissions.AllowAny]
