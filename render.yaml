@@ -10,7 +10,7 @@ services:
     runtime: python
     plan: free
     buildCommand: "bash build.sh"
-    startCommand: "gunicorn omninews_backend.wsgi:application --bind 0.0.0.0:$PORT"
+    startCommand: "python manage.py migrate && gunicorn omninews_backend.wsgi:application --bind 0.0.0.0:$PORT"
     envVars:
       - key: DATABASE_URL
         fromDatabase:
