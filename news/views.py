@@ -1014,18 +1014,26 @@ class LiveTelecastView(APIView):
         try:
             from .models import LiveTelecast
             telecast = LiveTelecast.get_current()
+            is_auth = bool(request.user and request.user.is_authenticated)
             state = {
                 "is_live": bool(telecast.is_live),
                 "title": str(telecast.title or ""),
                 "sport": str(telecast.sport or "Cricket"),
-                "stream_url": str(telecast.stream_url or ""),
+                # Only authenticated members who logged in or created an account can view live stream
+                "stream_url": str(telecast.stream_url or "") if is_auth else "",
+                "requires_login": not is_auth,
                 "viewers": str(telecast.viewers or "18.4K"),
             }
             _TELECAST_STATE = state
             return Response(state, status=status.HTTP_200_OK)
         except Exception as e:
             from django.core.cache import cache
-            state = cache.get("live_telecast_state") or _TELECAST_STATE
+            raw_state = cache.get("live_telecast_state") or _TELECAST_STATE
+            is_auth = bool(request.user and request.user.is_authenticated)
+            state = dict(raw_state)
+            if not is_auth:
+                state["stream_url"] = ""
+                state["requires_login"] = True
             return Response(state, status=status.HTTP_200_OK)
 
     def post(self, request):
