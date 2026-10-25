@@ -125,60 +125,158 @@ def fetch_genre_news(genre_obj, language='en', max_entries=35):
 
     try:
         q = urllib.parse.quote(genre_name)
-        feeds_to_fetch = [
-            # 1. Bing News RSS: Direct news_image photography and authentic news_source!
-            {
-                "url": f"https://www.bing.com/news/search?q={q}&format=rss",
-                "default_source": f"Global Wire ({genre_name})",
-                "lang": "en",
-                "is_bing": True,
-            },
-            # 2. Google News RSS Global
-            {
-                "url": f"https://news.google.com/rss/search?q={q}&hl=en-US&gl=US&ceid=US:en",
-                "default_source": f"Google News ({genre_name})",
-                "lang": "en",
-                "is_bing": False,
-            },
-            # 3. Google News RSS India
-            {
-                "url": f"https://news.google.com/rss/search?q={q}&hl=en-IN&gl=IN&ceid=IN:en",
-                "default_source": f"India Wire ({genre_name})",
-                "lang": "en",
-                "is_bing": False,
-            },
-        ]
+        g_lower = genre_name.lower()
+        feeds_to_fetch = []
 
-        # Dedicated tech/AI feeds if applicable
-        if 'artificial intelligence' in genre_name.lower() or 'ai' in genre_name.lower():
-            feeds_to_fetch.insert(0, {
-                "url": "https://techcrunch.com/category/artificial-intelligence/feed/",
-                "default_source": "TechCrunch AI",
-                "lang": "en",
-                "is_bing": False,
-            })
-            feeds_to_fetch.insert(1, {
-                "url": "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",
-                "default_source": "The Verge AI",
-                "lang": "en",
-                "is_bing": False,
-            })
-
-        # Multilingual feeds for Bengali / Hindi if requested or Bengali script detected
         if lang_code == 'bn' or re.search(r'[ঀ-৿]', genre_name):
-            feeds_to_fetch.insert(0, {
+            # Dedicated Bengali Topic & Search feeds
+            if 'world' in g_lower:
+                feeds_to_fetch.append({
+                    "url": "https://news.google.com/rss/headlines/section/topic/WORLD?hl=bn&gl=IN&ceid=IN:bn",
+                    "default_source": "Bengali World Wire",
+                    "lang": "bn",
+                    "is_bing": False,
+                })
+                feeds_to_fetch.append({
+                    "url": "https://news.google.com/rss/search?q=%E0%A6%AC%E0%A6%BF%E0%A6%B6%E0%A7%8D%E0%A6%AC&hl=bn&gl=IN&ceid=IN:bn",
+                    "default_source": "বিশ্ব সংবাদ",
+                    "lang": "bn",
+                    "is_bing": False,
+                })
+            elif 'nation' in g_lower or 'india' in g_lower:
+                feeds_to_fetch.append({
+                    "url": "https://news.google.com/rss/headlines/section/topic/NATION?hl=bn&gl=IN&ceid=IN:bn",
+                    "default_source": "Bengali National Wire",
+                    "lang": "bn",
+                    "is_bing": False,
+                })
+                feeds_to_fetch.append({
+                    "url": "https://news.google.com/rss/search?q=%E0%A6%AD%E0%A6%BE%E0%A6%B0%E0%A6%A4&hl=bn&gl=IN&ceid=IN:bn",
+                    "default_source": "ভারত সংবাদ",
+                    "lang": "bn",
+                    "is_bing": False,
+                })
+            elif 'tech' in g_lower or 'ai' in g_lower or 'artificial' in g_lower:
+                feeds_to_fetch.append({
+                    "url": "https://news.google.com/rss/headlines/section/topic/TECHNOLOGY?hl=bn&gl=IN&ceid=IN:bn",
+                    "default_source": "Bengali Tech Wire",
+                    "lang": "bn",
+                    "is_bing": False,
+                })
+                feeds_to_fetch.append({
+                    "url": "https://news.google.com/rss/search?q=%E0%A6%AA%E0%A7%8D%E0%A6%B0%E0%A6%AF%E0%A7%81%E0%A6%95%E0%A7%8D%E0%A6%A4%E0%A6%BF&hl=bn&gl=IN&ceid=IN:bn",
+                    "default_source": "প্রযুক্তি সংবাদ",
+                    "lang": "bn",
+                    "is_bing": False,
+                })
+            elif 'sport' in g_lower:
+                feeds_to_fetch.append({
+                    "url": "https://news.google.com/rss/headlines/section/topic/SPORTS?hl=bn&gl=IN&ceid=IN:bn",
+                    "default_source": "Bengali Sports Wire",
+                    "lang": "bn",
+                    "is_bing": False,
+                })
+                feeds_to_fetch.append({
+                    "url": "https://news.google.com/rss/search?q=%E0%A6%96%E0%A7%87%E0%A6%B2%E0%A6%BE&hl=bn&gl=IN&ceid=IN:bn",
+                    "default_source": "খেলার খবর",
+                    "lang": "bn",
+                    "is_bing": False,
+                })
+            elif 'region' in g_lower:
+                feeds_to_fetch.append({
+                    "url": "https://news.google.com/rss/search?q=%E0%A6%95%E0%A6%B2%E0%A6%95%E0%A6%BE%E0%A6%A4%E0%A6%BE&hl=bn&gl=IN&ceid=IN:bn",
+                    "default_source": "কলকাতা বার্তা",
+                    "lang": "bn",
+                    "is_bing": False,
+                })
+                feeds_to_fetch.append({
+                    "url": "https://news.google.com/rss/search?q=%E0%A6%AA%E0%A6%B6%E0%A7%8D%E0%A6%9A%E0%A6%BF%E0%A6%AE%E0%A6%AC%E0%A6%99%E0%A7%8D%E0%A6%97&hl=bn&gl=IN&ceid=IN:bn",
+                    "default_source": "পশ্চিমবঙ্গ বার্তা",
+                    "lang": "bn",
+                    "is_bing": False,
+                })
+
+            # Search query in Bengali
+            feeds_to_fetch.append({
                 "url": f"https://news.google.com/rss/search?q={q}&hl=bn&gl=IN&ceid=IN:bn",
                 "default_source": f"Bengali Wire ({genre_name})",
                 "lang": "bn",
                 "is_bing": False,
             })
+
         elif lang_code == 'hi' or re.search(r'[ऀ-ॿ]', genre_name):
-            feeds_to_fetch.insert(0, {
+            # Dedicated Hindi Topic & Search feeds
+            if 'world' in g_lower:
+                feeds_to_fetch.append({
+                    "url": "https://news.google.com/rss/headlines/section/topic/WORLD?hl=hi&gl=IN&ceid=IN:hi",
+                    "default_source": "Hindi World Wire",
+                    "lang": "hi",
+                    "is_bing": False,
+                })
+            elif 'nation' in g_lower or 'india' in g_lower:
+                feeds_to_fetch.append({
+                    "url": "https://news.google.com/rss/headlines/section/topic/NATION?hl=hi&gl=IN&ceid=IN:hi",
+                    "default_source": "Hindi National Wire",
+                    "lang": "hi",
+                    "is_bing": False,
+                })
+            elif 'tech' in g_lower or 'ai' in g_lower or 'artificial' in g_lower:
+                feeds_to_fetch.append({
+                    "url": "https://news.google.com/rss/headlines/section/topic/TECHNOLOGY?hl=hi&gl=IN&ceid=IN:hi",
+                    "default_source": "Hindi Tech Wire",
+                    "lang": "hi",
+                    "is_bing": False,
+                })
+            elif 'sport' in g_lower:
+                feeds_to_fetch.append({
+                    "url": "https://news.google.com/rss/headlines/section/topic/SPORTS?hl=hi&gl=IN&ceid=IN:hi",
+                    "default_source": "Hindi Sports Wire",
+                    "lang": "hi",
+                    "is_bing": False,
+                })
+
+            feeds_to_fetch.append({
                 "url": f"https://news.google.com/rss/search?q={q}&hl=hi&gl=IN&ceid=IN:hi",
                 "default_source": f"Hindi Wire ({genre_name})",
                 "lang": "hi",
                 "is_bing": False,
             })
+
+        else:
+            # English / Global feeds
+            feeds_to_fetch = [
+                {
+                    "url": f"https://www.bing.com/news/search?q={q}&format=rss",
+                    "default_source": f"Global Wire ({genre_name})",
+                    "lang": "en",
+                    "is_bing": True,
+                },
+                {
+                    "url": f"https://news.google.com/rss/search?q={q}&hl=en-US&gl=US&ceid=US:en",
+                    "default_source": f"Google News ({genre_name})",
+                    "lang": "en",
+                    "is_bing": False,
+                },
+                {
+                    "url": f"https://news.google.com/rss/search?q={q}&hl=en-IN&gl=IN&ceid=IN:en",
+                    "default_source": f"India Wire ({genre_name})",
+                    "lang": "en",
+                    "is_bing": False,
+                },
+            ]
+            if 'artificial intelligence' in g_lower or 'ai' in g_lower:
+                feeds_to_fetch.insert(0, {
+                    "url": "https://techcrunch.com/category/artificial-intelligence/feed/",
+                    "default_source": "TechCrunch AI",
+                    "lang": "en",
+                    "is_bing": False,
+                })
+                feeds_to_fetch.insert(1, {
+                    "url": "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",
+                    "default_source": "The Verge AI",
+                    "lang": "en",
+                    "is_bing": False,
+                })
 
         region_global, _ = Region.objects.get_or_create(code="GLOBAL", defaults={"name": "Global"})
         region_in, _ = Region.objects.get_or_create(code="IN", defaults={"name": "India"})
@@ -231,9 +329,9 @@ def fetch_genre_news(genre_obj, language='en', max_entries=35):
                     image_url = extract_high_res_image(entry, article_url=None)
 
                 item_lang = feed_lang
-                if re.search(r'[ঀ-৿]', title):
+                if re.search(r'[ঀ-৿]', title) or lang_code == 'bn':
                     item_lang = "bn"
-                elif re.search(r'[ऀ-ॿ]', title):
+                elif re.search(r'[ऀ-ॿ]', title) or lang_code == 'hi':
                     item_lang = "hi"
 
                 reg = region_global
@@ -384,12 +482,11 @@ class FeedView(generics.ListAPIView):
         languages_param = self.request.query_params.get("languages") or self.request.query_params.get("language")
         clarify_status = self.request.query_params.get("clarify_status")
 
-        # Fallback to user saved preferences ONLY on home feed (no explicit genre or genres requested)
-        if not genre_param and not genres_param:
-            if not city_param and user.is_authenticated and getattr(user, 'preferred_city', None):
-                city_param = user.preferred_city
-            if not languages_param and user.is_authenticated and getattr(user, 'preferred_languages', None):
-                languages_param = user.preferred_languages
+        # Fallback to user saved preferences on ANY feed (including genre tabs) if languages_param was not sent
+        if not languages_param and user.is_authenticated and getattr(user, 'preferred_languages', None):
+            languages_param = user.preferred_languages
+        if not city_param and user.is_authenticated and getattr(user, 'preferred_city', None):
+            city_param = user.preferred_city
 
         city_aliases = {
             'birlin': 'Berlin',
@@ -439,21 +536,19 @@ class FeedView(generics.ListAPIView):
                 target_genre_ids.extend(user_g_ids)
 
         # 2. Fully Autonomous Live Genre News Ingestion
-        # If the genre has 0 articles, fetch synchronously right now so the user NEVER sees an empty screen or fallback!
-        primary_lang = (languages_param.split(',')[0].strip()) if languages_param else 'en'
+        # If the genre has < 8 articles in the user's preferred language, fetch synchronously right now!
+        primary_lang = (languages_param.split(',')[0].strip().split('_')[0].lower()) if languages_param else 'en'
         if target_genre_ids:
             for gid in target_genre_ids:
                 g_obj = Genre.objects.filter(id=gid).first()
                 if g_obj:
-                    count_in_g = Article.objects.filter(genre=g_obj).count()
-                    if count_in_g == 0:
+                    lang_count_in_g = Article.objects.filter(genre=g_obj, language=primary_lang).count() if primary_lang != 'en' else Article.objects.filter(genre=g_obj).count()
+                    if lang_count_in_g < 8:
                         try:
-                            fetch_genre_news(g_obj, language=primary_lang, max_entries=20)
+                            fetch_genre_news(g_obj, language=primary_lang, max_entries=35)
                         except Exception:
                             pass
-                        threading.Thread(target=fetch_genre_news, args=(g_obj,), kwargs={"max_entries": 40}, daemon=True).start()
-                    elif count_in_g < 12:
-                        threading.Thread(target=fetch_genre_news, args=(g_obj, primary_lang), daemon=True).start()
+                        threading.Thread(target=fetch_genre_news, args=(g_obj, primary_lang), kwargs={"max_entries": 50}, daemon=True).start()
 
         # 2.1 On-demand live city news ingestion in the background (non-blocking)
         if norm_city:
@@ -481,7 +576,7 @@ class FeedView(generics.ListAPIView):
         if region_id:
             base_qs = base_qs.filter(region_id=region_id)
 
-        # Primary Language Filter: prefer requested language, but preserve genre articles if none match
+        # Primary Language Filter: prefer requested language, with on-demand fallback fetch
         filtered_by_lang = base_qs
         if languages_param:
             lang_codes = [l.strip().split('_')[0].lower() for l in languages_param.split(',') if l.strip()]
@@ -490,7 +585,23 @@ class FeedView(generics.ListAPIView):
                 if lang_match.exists():
                     filtered_by_lang = lang_match
                 else:
-                    filtered_by_lang = base_qs
+                    if target_genre_ids:
+                        for gid in target_genre_ids:
+                            g_obj = Genre.objects.filter(id=gid).first()
+                            if g_obj:
+                                for lc in lang_codes:
+                                    if lc != 'en':
+                                        try:
+                                            fetch_genre_news(g_obj, language=lc, max_entries=35)
+                                        except Exception:
+                                            pass
+                        retry_match = base_qs.filter(language__in=lang_codes)
+                        if retry_match.exists():
+                            filtered_by_lang = retry_match
+                        else:
+                            filtered_by_lang = base_qs
+                    else:
+                        filtered_by_lang = base_qs
 
         # Smart City Matching: prioritize city stories, but NEVER wipe out the feed to 0
         if norm_city:
