@@ -119,3 +119,33 @@ class Bookmark(models.Model):
 
     def __str__(self):
         return f"{self.user} bookmarked {self.article_id}"
+
+class LiveTelecast(models.Model):
+    is_live = models.BooleanField(default=False)
+    title = models.CharField(max_length=255, default="ICC T20 World Cup • IND vs AUS")
+    sport = models.CharField(max_length=100, default="Cricket")
+    stream_url = models.TextField(blank=True, default="")
+    viewers = models.CharField(max_length=50, default="18.4K")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Live Telecast"
+        verbose_name_plural = "Live Telecasts"
+
+    def __str__(self):
+        status_text = "LIVE" if self.is_live else "OFFLINE"
+        return f"[{status_text}] {self.title} ({self.sport})"
+
+    @classmethod
+    def get_current(cls):
+        telecast, _ = cls.objects.get_or_create(
+            id=1,
+            defaults={
+                "is_live": False,
+                "title": "ICC T20 World Cup • IND vs AUS",
+                "sport": "Cricket",
+                "stream_url": "",
+                "viewers": "18.4K",
+            }
+        )
+        return telecast

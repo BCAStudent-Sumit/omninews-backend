@@ -1005,28 +1005,51 @@ class LiveTelecastView(APIView):
     """
     Real-Time Global Broadcast Synchronizer
     GET:  Publicly accessible by all consumers/viewers on all devices.
-    POST: Broadcaster Studio control (restricted to Sumit / admin / staff).
+    POST: Broadcaster Studio control (Sumit / admin / staff / broadcaster_key).
     """
     permission_classes = [permissions.AllowAny]
 
     def get(self, request):
-        from django.core.cache import cache
-        state = cache.get("live_telecast_state")
-        if not state:
-            state = _TELECAST_STATE
-        return Response(state, status=status.HTTP_200_OK)
+        global _TELECAST_STATE
+        try:
+            from .models import LiveTelecast
+            telecast = LiveTelecast.get_current()
+            state = {
+                "is_live": bool(telecast.is_live),
+                "title": str(telecast.title or ""),
+                "sport": str(telecast.sport or "Cricket"),
+                "stream_url": str(telecast.stream_url or ""),
+                "viewers": str(telecast.viewers or "18.4K"),
+            }
+            _TELECAST_STATE = state
+            return Response(state, status=status.HTTP_200_OK)
+        except Exception as e:
+            from django.core.cache import cache
+            state = cache.get("live_telecast_state") or _TELECAST_STATE
+            return Response(state, status=status.HTTP_200_OK)
 
     def post(self, request):
         global _TELECAST_STATE
-        user = request.user
-        if not user or not user.is_authenticated:
-            return Response({"error": "Authentication required"}, status=status.HTTP_401_UNAUTHORIZED)
-        
-        username = (getattr(user, 'username', '') or '').lower()
-        if not (user.is_staff or getattr(user, 'is_superuser', False) or username in ['sumit', 'admin']):
-            return Response({"error": "Only broadcaster admin can manage live telecast."}, status=status.HTTP_403_FORBIDDEN)
-
         data = request.data or {}
+        
+        # Check authorization via JWT user or broadcaster secret key
+        is_authorized = False
+        user = request.user
+        if user and user.is_authenticated:
+            username = (getattr(user, 'username', '') or '').lower()
+            if user.is_staff or getattr(user, 'is_superuser', False) or username in ['sumit', 'admin']:
+                is_authorized = True
+
+        broadcaster_key = str(data.get('broadcaster_key') or data.get('admin_key') or data.get('admin_pass') or '').strip()
+        if broadcaster_key in ['Sumit1906', 'Sumit', 'omninews_live_secret']:
+            is_authorized = True
+
+        if not is_authorized:
+            return Response(
+                {"error": "Only broadcaster admin (Sumit) can manage live telecasts."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         is_live = bool(data.get("is_live", False))
         title = str(data.get("title", "ICC T20 World Cup • IND vs AUS")).strip()
         sport = str(data.get("sport", "Cricket")).strip()
@@ -1041,7 +1064,25 @@ class LiveTelecastView(APIView):
             "viewers": viewers,
         }
         _TELECAST_STATE = state
-        from django.core.cache import cache
-        cache.set("live_telecast_state", state, timeout=None)
+
+        # 1. Persist to PostgreSQL database (survives restarts & syncs across all Gunicorn workers)
+        try:
+            from .models import LiveTelecast
+            telecast = LiveTelecast.get_current()
+            telecast.is_live = is_live
+            telecast.title = title
+            telecast.sport = sport
+            telecast.stream_url = stream_url
+            telecast.viewers = viewers
+            telecast.save()
+        except Exception as e:
+            pass
+
+        # 2. Update cache
+        try:
+            from django.core.cache import cache
+            cache.set("live_telecast_state", state, timeout=None)
+        except Exception:
+            pass
 
         return Response(state, status=status.HTTP_200_OK)
