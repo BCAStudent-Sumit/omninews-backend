@@ -1007,7 +1007,7 @@ class LiveTelecastView(APIView):
     GET:  Publicly accessible by all consumers/viewers on all devices.
     POST: Broadcaster Studio control (restricted to Sumit / admin / staff).
     """
-    permission_classes = [AllowAny]
+    permission_classes = [permissions.AllowAny]
 
     def get(self, request):
         from django.core.cache import cache
