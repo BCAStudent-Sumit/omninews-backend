@@ -169,9 +169,10 @@ def clean_bengali_text_for_speech(text: str) -> str:
 def translate_text(text: str, target_lang: str) -> str:
     """
     Translates text to target language code using reliable translation endpoint.
+    Auto-detects source language (sl=auto) and translates to any target language.
     Falls back to original text on network timeout.
     """
-    if not text or target_lang in ('en', 'en_in'):
+    if not text or not text.strip():
         return text
 
     # Extract base 2-letter language code if locale supplied (e.g. 'bn-IN' -> 'bn')
@@ -191,7 +192,7 @@ def translate_text(text: str, target_lang: str) -> str:
             url,
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"}
         )
-        with urllib.request.urlopen(req, timeout=4) as response:
+        with urllib.request.urlopen(req, timeout=5) as response:
             payload = json.loads(response.read().decode("utf-8"))
             if payload and isinstance(payload, list) and len(payload) > 0 and isinstance(payload[0], list):
                 translated_parts = [segment[0] for segment in payload[0] if segment and len(segment) > 0 and segment[0]]
@@ -204,12 +205,42 @@ def translate_text(text: str, target_lang: str) -> str:
     return text
 
 
+def translate_full_article(text: str, target_lang: str) -> str:
+    """
+    Translates full article text preserving paragraph structures and sentence flow.
+    Splits long bodies across paragraphs and stitches them with proper punctuation.
+    """
+    if not text or not text.strip():
+        return text
+
+    tl = target_lang.split('-')[0].split('_')[0].lower()
+    paragraphs = text.split("\n")
+    translated_paras = []
+
+    for p in paragraphs:
+        cleaned_p = p.strip()
+        if not cleaned_p:
+            translated_paras.append("")
+            continue
+        if len(cleaned_p) > 1200:
+            sentences = re.split(r'(?<=[.!?।])\s+', cleaned_p)
+            trans_sentences = [translate_text(s, tl) for s in sentences if s.strip()]
+            translated_paras.append(" ".join(trans_sentences))
+        else:
+            translated_paras.append(translate_text(cleaned_p, tl))
+
+    res = "\n".join(translated_paras)
+    if tl == 'bn':
+        res = clean_bengali_text_for_speech(res)
+    return res
+
+
 def translate_batch(texts: list, target_lang: str) -> list:
     """
     Translates multiple strings in parallel using a thread pool.
     Results are cached to minimize redundant network round trips.
     """
-    if not texts or target_lang in ('en', 'en_in'):
+    if not texts:
         return list(texts)
 
     tl = target_lang.split('-')[0].split('_')[0].lower()

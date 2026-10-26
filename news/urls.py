@@ -15,6 +15,7 @@ from .views import (
     AiStatusView,
     MarketQuotesView,
     LiveTelecastView,
+    ArticleTranslateView,
 )
 
 urlpatterns = [
@@ -23,6 +24,7 @@ urlpatterns = [
     path("genres/", GenreListView.as_view(), name="genre-list"),
     path("articles/", ArticleListView.as_view(), name="article-list"),
     path("feed/", FeedView.as_view(), name="news-feed"),
+    path("translate/", ArticleTranslateView.as_view(), name="article-translate"),
     path("ai-assist/", AiAssistView.as_view(), name="ai-assist"),
     path("ai-status/", AiStatusView.as_view(), name="ai-status"),
     path("image-proxy/", ImageProxyView.as_view(), name="image-proxy"),

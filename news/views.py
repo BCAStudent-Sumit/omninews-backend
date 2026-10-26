@@ -917,6 +917,8 @@ from .ai_service import (
     generate_omni_ai_assistance,
     get_gemini_status,
     set_gemini_api_key,
+    translate_text,
+    translate_full_article,
 )
 
 
@@ -1255,3 +1257,78 @@ class LiveTelecastView(APIView):
             pass
 
         return Response(state, status=status.HTTP_200_OK)
+
+
+_ARTICLE_TRANSLATIONS_CACHE = {}
+
+class ArticleTranslateView(APIView):
+    """
+    In-Place Article Translation Endpoint:
+    Allows readers to translate ANY news article into ANY target language on demand
+    (e.g., English -> Bengali, Bengali -> German, German -> English, Hindi -> Spanish).
+    Preserves the active feed context while delivering translated title and body.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        article_id = request.query_params.get("article_id")
+        target_lang = request.query_params.get("target_language") or request.query_params.get("language") or "en"
+        return self._handle_translation(article_id=article_id, title=None, body=None, target_lang=target_lang)
+
+    def post(self, request):
+        article_id = request.data.get("article_id")
+        title = request.data.get("title")
+        body = request.data.get("body")
+        target_lang = request.data.get("target_language") or request.data.get("language") or "en"
+        return self._handle_translation(article_id=article_id, title=title, body=body, target_lang=target_lang)
+
+    def _handle_translation(self, article_id, title, body, target_lang):
+        orig_article = None
+        orig_title = (title or "").strip()
+        orig_body = (body or "").strip()
+        orig_lang = "auto"
+
+        if article_id:
+            try:
+                orig_article = Article.objects.filter(id=article_id).first()
+                if orig_article:
+                    if not orig_title:
+                        orig_title = orig_article.title
+                    if not orig_body:
+                        orig_body = orig_article.body
+                    orig_lang = orig_article.language or "en"
+            except Exception:
+                pass
+
+        if not orig_title and not orig_body:
+            return Response(
+                {"detail": "Article ID or title/body is required for translation."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        tl = target_lang.split('-')[0].split('_')[0].lower()
+        tl_name = LANG_CONFIGS.get(tl, {}).get("name", tl.upper())
+
+        cache_key = (str(article_id) if article_id else orig_title[:80], tl)
+        if cache_key in _ARTICLE_TRANSLATIONS_CACHE:
+            cached = _ARTICLE_TRANSLATIONS_CACHE[cache_key]
+            return Response(cached, status=status.HTTP_200_OK)
+
+        # Translate title & full article body preserving paragraphs
+        translated_title = translate_text(orig_title, tl) if orig_title else ""
+        translated_body = translate_full_article(orig_body, tl) if orig_body else ""
+
+        payload = {
+            "status": "success",
+            "article_id": int(article_id) if article_id else None,
+            "target_language": tl,
+            "target_language_name": tl_name,
+            "translated_title": translated_title,
+            "translated_body": translated_body,
+            "original_title": orig_title,
+            "original_body": orig_body,
+            "original_language": orig_lang,
+        }
+
+        _ARTICLE_TRANSLATIONS_CACHE[cache_key] = payload
+        return Response(payload, status=status.HTTP_200_OK)
