@@ -628,14 +628,28 @@ class FeedView(generics.ListAPIView):
         return queryset.order_by("-published_at", "-id")
 
     def list(self, request, *args, **kwargs):
-        # High-performance in-memory cache (3 min TTL)
+        # Resolve target translation language (query param or authenticated user profile)
+        translate_to = request.query_params.get("translate_to") or request.query_params.get("translate")
+        if not translate_to:
+            langs = request.query_params.get("languages") or request.query_params.get("language")
+            if not langs and request.user and request.user.is_authenticated and getattr(request.user, 'preferred_languages', None):
+                langs = request.user.preferred_languages
+            if langs:
+                for l_candidate in str(langs).split(','):
+                    cand = l_candidate.strip().split('_')[0].split('-')[0].lower()
+                    if cand and cand != 'en':
+                        translate_to = cand
+                        break
+
+        # High-performance in-memory cache (3 min TTL) with user and language partition
+        user_id = request.user.id if (request.user and request.user.is_authenticated) else "anon"
         cache_key = (
+            user_id,
             request.query_params.get("genre", ""),
             request.query_params.get("genres", ""),
             request.query_params.get("region", ""),
             request.query_params.get("city", "").strip().lower(),
-            (request.query_params.get("languages") or request.query_params.get("language") or "en").strip().lower(),
-            request.query_params.get("translate_to", "").strip().lower(),
+            translate_to or "en",
         )
         now = time.time()
         if cache_key in _FEED_MEM_CACHE:
@@ -645,26 +659,21 @@ class FeedView(generics.ListAPIView):
 
         response = super().list(request, *args, **kwargs)
 
-        # On-the-fly fast feed translation without replacing the rich global news feed!
-        translate_to = request.query_params.get("translate_to") or request.query_params.get("translate")
-        if not translate_to:
-            langs = request.query_params.get("languages") or request.query_params.get("language")
-            if langs:
-                primary_l = langs.split(',')[0].strip().split('_')[0].lower()
-                if primary_l != 'en':
-                    translate_to = primary_l
-
         if translate_to and translate_to not in ('en', 'en_in'):
             tl = translate_to.split('-')[0].split('_')[0].lower()
             results = response.data.get('results', []) if isinstance(response.data, dict) else response.data
             if results and isinstance(results, list):
-                # Translate top 12 titles in parallel for instantaneous card rendering
+                # Translate top 12 titles and top 3 hero snippets in parallel
                 titles = [r.get('title', '') for r in results[:12]]
+                snippets = [r.get('body', '')[:200] for r in results[:3]]
                 trans_titles = translate_batch(titles, tl)
+                trans_snippets = translate_batch(snippets, tl)
                 for i, r in enumerate(results):
                     r['original_title'] = r.get('title', '')
                     if i < len(trans_titles) and trans_titles[i]:
                         r['title'] = trans_titles[i]
+                    if i < len(trans_snippets) and trans_snippets[i]:
+                        r['body'] = trans_snippets[i]
                     r['translated_to'] = tl
                     r['translated_to_name'] = LANG_CONFIGS.get(tl, {}).get('name', tl.upper())
 
