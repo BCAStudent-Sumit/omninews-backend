@@ -16,9 +16,11 @@ from .views import (
     MarketQuotesView,
     LiveTelecastView,
     ArticleTranslateView,
+    PingView,
 )
 
 urlpatterns = [
+    path("ping/", PingView.as_view(), name="ping"),
     path("telecast/", LiveTelecastView.as_view(), name="live-telecast"),
     path("markets/", MarketQuotesView.as_view(), name="market-quotes"),
     path("genres/", GenreListView.as_view(), name="genre-list"),

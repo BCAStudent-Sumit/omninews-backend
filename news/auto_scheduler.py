@@ -32,6 +32,53 @@ def _background_worker():
         # Wait for the next interval
         time.sleep(INTERVAL_SECONDS)
 
+
+def _keep_alive_worker():
+    """
+    Self-pinging background daemon:
+    Sends an inbound HTTP request to Render every 8 minutes (480s) to ensure
+    Render's 15-minute inactivity timer NEVER triggers, keeping the server
+    awake 24/7 with zero cold starts.
+    Also warms up the top language feeds in memory so readers get instant 2ms responses.
+    """
+    import urllib.request
+    import json
+
+    # Allow gunicorn/server to bind before initial self-ping
+    time.sleep(12)
+    backend_url = "https://omninews-backend.onrender.com"
+
+    while True:
+        try:
+            # 1. Self-ping to reset Render 15-minute idle timer
+            ping_url = f"{backend_url}/api/news/ping/"
+            req = urllib.request.Request(ping_url, headers={"User-Agent": "OmniNewsKeepAlive/1.0"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                logger.info(f"[Keep-Alive] Server pinged: {data.get('status')}")
+
+            # 2. Warm up top language feeds into memory cache
+            warmup_targets = [
+                f"{backend_url}/api/news/feed/",
+                f"{backend_url}/api/news/feed/?languages=bn",
+                f"{backend_url}/api/news/feed/?languages=de",
+                f"{backend_url}/api/news/feed/?languages=hi",
+                f"{backend_url}/api/news/feed/?genres=3&languages=bn",
+            ]
+            for target in warmup_targets:
+                try:
+                    wreq = urllib.request.Request(target, headers={"User-Agent": "OmniNewsWarmup/1.0"})
+                    with urllib.request.urlopen(wreq, timeout=20) as wresp:
+                        pass
+                except Exception:
+                    pass
+
+        except Exception as e:
+            logger.warning(f"[Keep-Alive] Ping notice: {e}")
+
+        # Sleep for 8 minutes (480s) - well below Render's 15-minute threshold
+        time.sleep(480)
+
 def start_auto_fetcher():
     """
     Starts the automated background news fetcher thread safely.
@@ -61,4 +108,10 @@ def start_auto_fetcher():
             name="OmniNewsAutoFetcherThread",
             daemon=True,
         )
+        keep_alive_thread = threading.Thread(
+            target=_keep_alive_worker,
+            name="OmniNewsKeepAliveThread",
+            daemon=True,
+        )
+        keep_alive_thread.start()
         worker_thread.start()

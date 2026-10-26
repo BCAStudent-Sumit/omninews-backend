@@ -1315,3 +1315,20 @@ class ArticleTranslateView(APIView):
 
         _ARTICLE_TRANSLATIONS_CACHE[cache_key] = payload
         return Response(payload, status=status.HTTP_200_OK)
+
+
+class PingView(APIView):
+    """
+    Ultra-lightweight health and keep-alive ping endpoint.
+    Used by internal background workers and client apps to ensure
+    Render free tier container never sleeps and warmups stay fresh.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        return Response({
+            "status": "online",
+            "server_time": time.time(),
+            "cached_feeds": len(_FEED_MEM_CACHE),
+            "message": "OmniNews Cloud is active and ready",
+        }, status=status.HTTP_200_OK)
