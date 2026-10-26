@@ -69,7 +69,7 @@ class ArticleListView(generics.ListAPIView):
         if region_id:
             queryset = queryset.filter(region_id=region_id)
 
-        return queryset
+        return queryset.order_by("-published_at", "-id")
 
 
 _ACTIVE_CITY_FETCHES = set()
@@ -623,7 +623,7 @@ class FeedView(generics.ListAPIView):
         if clarify_status:
             queryset = queryset.filter(clarify_status=clarify_status)
 
-        return queryset
+        return queryset.order_by("-published_at", "-id")
 
     def list(self, request, *args, **kwargs):
         response = super().list(request, *args, **kwargs)
@@ -655,7 +655,7 @@ class FeedView(generics.ListAPIView):
                     r['translated_to'] = tl
                     r['translated_to_name'] = LANG_CONFIGS.get(tl, {}).get('name', tl.upper())
 
-        return response.order_by("-published_at", "-id")
+        return response
     
 class ArticleClaimListCreateView(generics.ListCreateAPIView):
     """
