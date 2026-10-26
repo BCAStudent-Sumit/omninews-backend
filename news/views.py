@@ -560,50 +560,24 @@ class FeedView(generics.ListAPIView):
             if user_g_ids:
                 target_genre_ids.extend(user_g_ids)
 
-        # 2. Fully Autonomous Live Genre News Ingestion
-        # If the genre has < 8 articles in the user's preferred language, fetch synchronously right now!
-        primary_lang = (languages_param.split(',')[0].strip().split('_')[0].lower()) if languages_param else 'en'
+        # 2. Fully Asynchronous Background Ingestion (100% NON-BLOCKING)
+        # Never block the HTTP request thread with slow external RSS fetches!
         if target_genre_ids:
             for gid in target_genre_ids:
                 g_obj = Genre.objects.filter(id=gid).first()
                 if g_obj:
-                    lang_count_in_g = Article.objects.filter(genre=g_obj, language=primary_lang).count() if primary_lang != 'en' else Article.objects.filter(genre=g_obj).count()
-                    if lang_count_in_g < 8:
-                        try:
-                            fetch_genre_news(g_obj, language=primary_lang, max_entries=35)
-                        except Exception:
-                            pass
-                        threading.Thread(target=fetch_genre_news, args=(g_obj, primary_lang), kwargs={"max_entries": 50}, daemon=True).start()
-        else:
-            # Home feed / no genre specified: ensure user has real-time articles in their selected language!
-            if primary_lang != 'en':
-                lang_total = Article.objects.filter(language=primary_lang).count()
-                if lang_total < 8:
-                    for g_name in ["World", "National", "Technology", "Sports", "AI"]:
-                        g_obj = Genre.objects.filter(name__iexact=g_name).first()
-                        if g_obj:
-                            try:
-                                fetch_genre_news(g_obj, language=primary_lang, max_entries=20)
-                            except Exception:
-                                pass
+                    count_in_g = Article.objects.filter(genre=g_obj).count()
+                    if count_in_g < 8:
+                        threading.Thread(target=fetch_genre_news, args=(g_obj,), kwargs={"max_entries": 35}, daemon=True).start()
 
-        # 2.1 On-demand live city news ingestion in the background (non-blocking)
         if norm_city:
             city_name = norm_city
             city_q = Q(region__name__icontains=city_name) | Q(title__icontains=city_name) | Q(body__icontains=city_name)
+            matching_count = Article.objects.filter(city_q).count()
+            if matching_count < 8:
+                threading.Thread(target=fetch_city_news, args=(city_name,), daemon=True).start()
 
-            if target_genre_ids:
-                for gid in target_genre_ids:
-                    g_obj = Genre.objects.filter(id=gid).first()
-                    matching_count = Article.objects.filter(city_q, genre=g_obj).count()
-                    if matching_count < 8:
-                        threading.Thread(target=fetch_city_news, args=(city_name, g_obj, primary_lang), daemon=True).start()
-            else:
-                matching_count = Article.objects.filter(city_q).count()
-                if matching_count < 8:
-                    threading.Thread(target=fetch_city_news, args=(city_name, None, primary_lang), daemon=True).start()
-
-        # 3. Apply Filters with Smart Cascading Fallback
+        # 3. Apply Filters - Keep rich global/national stories intact!
         base_qs = queryset
 
         # Apply target genres if specified
@@ -613,46 +587,6 @@ class FeedView(generics.ListAPIView):
         if region_id:
             base_qs = base_qs.filter(region_id=region_id)
 
-        # Primary Language Filter: prefer requested language, with on-demand fallback fetch
-        filtered_by_lang = base_qs
-        if languages_param:
-            lang_codes = [l.strip().split('_')[0].lower() for l in languages_param.split(',') if l.strip()]
-            if lang_codes:
-                lang_match = base_qs.filter(language__in=lang_codes)
-                if lang_match.exists():
-                    filtered_by_lang = lang_match
-                else:
-                    if target_genre_ids:
-                        for gid in target_genre_ids:
-                            g_obj = Genre.objects.filter(id=gid).first()
-                            if g_obj:
-                                for lc in lang_codes:
-                                    if lc != 'en':
-                                        try:
-                                            fetch_genre_news(g_obj, language=lc, max_entries=35)
-                                        except Exception:
-                                            pass
-                        retry_match = base_qs.filter(language__in=lang_codes)
-                        if retry_match.exists():
-                            filtered_by_lang = retry_match
-                        else:
-                            filtered_by_lang = base_qs
-                    else:
-                        for g_name in ["World", "National", "Technology", "Sports", "AI"]:
-                            g_obj = Genre.objects.filter(name__iexact=g_name).first()
-                            if g_obj:
-                                for lc in lang_codes:
-                                    if lc != 'en':
-                                        try:
-                                            fetch_genre_news(g_obj, language=lc, max_entries=20)
-                                        except Exception:
-                                            pass
-                        retry_home = base_qs.filter(language__in=lang_codes)
-                        if retry_home.exists():
-                            filtered_by_lang = retry_home
-                        else:
-                            filtered_by_lang = base_qs
-
         # Smart City Matching: prioritize city stories, but NEVER wipe out the feed to 0
         if norm_city:
             city_name = norm_city
@@ -661,22 +595,13 @@ class FeedView(generics.ListAPIView):
                 Q(title__icontains=city_name) |
                 Q(body__icontains=city_name)
             )
-            city_qs = filtered_by_lang.filter(city_filter)
+            city_qs = base_qs.filter(city_filter)
             if city_qs.count() >= 3:
                 queryset = city_qs
-            elif filtered_by_lang.exists():
-                queryset = filtered_by_lang
-            elif base_qs.exists():
-                queryset = base_qs
             else:
                 queryset = base_qs
         else:
-            if filtered_by_lang.exists():
-                queryset = filtered_by_lang
-            elif base_qs.exists():
-                queryset = base_qs
-            else:
-                queryset = base_qs
+            queryset = base_qs
 
         # Guaranteed Safety Fallback: A user should NEVER receive an empty feed
         # BUT if a genre was explicitly targeted, NEVER fallback to unrelated World / Politics stories!
@@ -698,7 +623,39 @@ class FeedView(generics.ListAPIView):
         if clarify_status:
             queryset = queryset.filter(clarify_status=clarify_status)
 
-        return queryset.order_by("-published_at", "-id")
+        return queryset
+
+    def list(self, request, *args, **kwargs):
+        response = super().list(request, *args, **kwargs)
+
+        # On-the-fly fast feed translation without replacing the rich global news feed!
+        translate_to = request.query_params.get("translate_to") or request.query_params.get("translate")
+        if not translate_to:
+            langs = request.query_params.get("languages") or request.query_params.get("language")
+            if langs:
+                primary_l = langs.split(',')[0].strip().split('_')[0].lower()
+                if primary_l != 'en':
+                    translate_to = primary_l
+
+        if translate_to and translate_to not in ('en', 'en_in'):
+            tl = translate_to.split('-')[0].split('_')[0].lower()
+            results = response.data.get('results', []) if isinstance(response.data, dict) else response.data
+            if results and isinstance(results, list):
+                titles = [r.get('title', '') for r in results]
+                bodies = [r.get('body', '')[:400] for r in results]
+                trans_titles = translate_batch(titles, tl)
+                trans_bodies = translate_batch(bodies, tl)
+                for i, r in enumerate(results):
+                    r['original_title'] = r.get('title', '')
+                    r['original_body'] = r.get('body', '')
+                    if trans_titles and i < len(trans_titles) and trans_titles[i]:
+                        r['title'] = trans_titles[i]
+                    if trans_bodies and i < len(trans_bodies) and trans_bodies[i]:
+                        r['body'] = trans_bodies[i]
+                    r['translated_to'] = tl
+                    r['translated_to_name'] = LANG_CONFIGS.get(tl, {}).get('name', tl.upper())
+
+        return response.order_by("-published_at", "-id")
     
 class ArticleClaimListCreateView(generics.ListCreateAPIView):
     """
@@ -919,6 +876,7 @@ from .ai_service import (
     set_gemini_api_key,
     translate_text,
     translate_full_article,
+    translate_batch,
 )
 
 
