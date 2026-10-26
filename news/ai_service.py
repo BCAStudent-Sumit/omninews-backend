@@ -262,7 +262,7 @@ def translate_batch(texts: list, target_lang: str) -> list:
         trans = translate_text(original, tl)
         return idx, trans
 
-    max_w = min(len(to_fetch), 8)
+    max_w = min(len(to_fetch), 12)
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
         for idx, trans in executor.map(_worker, to_fetch):
             results[idx] = trans

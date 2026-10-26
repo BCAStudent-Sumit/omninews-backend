@@ -1,3 +1,4 @@
+_FEED_MEM_CACHE = {}
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from django.db import transaction
@@ -626,6 +627,21 @@ class FeedView(generics.ListAPIView):
         return queryset.order_by("-published_at", "-id")
 
     def list(self, request, *args, **kwargs):
+        # High-performance in-memory cache (3 min TTL)
+        cache_key = (
+            request.query_params.get("genre", ""),
+            request.query_params.get("genres", ""),
+            request.query_params.get("region", ""),
+            request.query_params.get("city", "").strip().lower(),
+            (request.query_params.get("languages") or request.query_params.get("language") or "en").strip().lower(),
+            request.query_params.get("translate_to", "").strip().lower(),
+        )
+        now = time.time()
+        if cache_key in _FEED_MEM_CACHE:
+            ts, cached_data = _FEED_MEM_CACHE[cache_key]
+            if now - ts < 180:
+                return Response(cached_data)
+
         response = super().list(request, *args, **kwargs)
 
         # On-the-fly fast feed translation without replacing the rich global news feed!
@@ -641,19 +657,18 @@ class FeedView(generics.ListAPIView):
             tl = translate_to.split('-')[0].split('_')[0].lower()
             results = response.data.get('results', []) if isinstance(response.data, dict) else response.data
             if results and isinstance(results, list):
-                titles = [r.get('title', '') for r in results]
-                bodies = [r.get('body', '')[:400] for r in results]
+                # Translate top 12 titles in parallel for instantaneous card rendering
+                titles = [r.get('title', '') for r in results[:12]]
                 trans_titles = translate_batch(titles, tl)
-                trans_bodies = translate_batch(bodies, tl)
                 for i, r in enumerate(results):
                     r['original_title'] = r.get('title', '')
-                    r['original_body'] = r.get('body', '')
-                    if trans_titles and i < len(trans_titles) and trans_titles[i]:
+                    if i < len(trans_titles) and trans_titles[i]:
                         r['title'] = trans_titles[i]
-                    if trans_bodies and i < len(trans_bodies) and trans_bodies[i]:
-                        r['body'] = trans_bodies[i]
                     r['translated_to'] = tl
                     r['translated_to_name'] = LANG_CONFIGS.get(tl, {}).get('name', tl.upper())
+
+        if hasattr(response, 'data'):
+            _FEED_MEM_CACHE[cache_key] = (now, response.data)
 
         return response
     
