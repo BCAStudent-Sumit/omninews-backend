@@ -1355,12 +1355,57 @@ class PodcastsExploreView(APIView):
         except ValueError:
             limit = 25
 
+        pi_key = (
+            request.headers.get("X-Podcast-Index-Key")
+            or request.query_params.get("api_key")
+            or request.query_params.get("pi_key")
+        )
+        pi_secret = (
+            request.headers.get("X-Podcast-Index-Secret")
+            or request.query_params.get("api_secret")
+            or request.query_params.get("pi_secret")
+        )
+
         data = get_famous_podcasts(
             language=language,
             platform=platform,
             category=category,
             query=query,
             limit=limit,
+            podcast_index_key=pi_key,
+            podcast_index_secret=pi_secret,
         )
         return Response(data, status=status.HTTP_200_OK)
+
+
+class PodcastIndexStatusView(APIView):
+    """
+    Check status of Podcast Index API integration and test API credentials.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        import os
+        has_server_keys = bool(
+            os.environ.get("PODCAST_INDEX_KEY") or os.environ.get("PODCASTINDEX_API_KEY")
+        )
+        return Response({
+            "status": "success",
+            "provider": "Podcast Index (Podcasting 2.0)",
+            "server_configured": has_server_keys,
+            "docs": "https://podcastindex.org",
+            "signup_url": "https://api.podcastindex.org/signup",
+        }, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        from .podcast_service import test_podcastindex_credentials
+        api_key = request.data.get("api_key") or request.headers.get("X-Podcast-Index-Key")
+        api_secret = request.data.get("api_secret") or request.headers.get("X-Podcast-Index-Secret")
+
+        valid, msg = test_podcastindex_credentials(api_key, api_secret)
+        return Response({
+            "status": "success" if valid else "error",
+            "valid": valid,
+            "message": msg,
+        }, status=status.HTTP_200_OK if valid else status.HTTP_400_BAD_REQUEST)
 
