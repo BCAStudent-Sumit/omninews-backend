@@ -36,6 +36,7 @@ urlpatterns = [
     path('', api_root_view, name='root'),
     re_path(r'^api/?$', api_root_view, name='api_root'),
     path('admin/', admin.site.urls),
+    path('api/podcasts/', include('news.urls')),
     path('api/news/', include('news.urls')),
 
     # JWT Auth Endpoints
