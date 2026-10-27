@@ -17,10 +17,13 @@ from .views import (
     LiveTelecastView,
     ArticleTranslateView,
     PingView,
+    PodcastsExploreView,
 )
 
 urlpatterns = [
     path("ping/", PingView.as_view(), name="ping"),
+    path("podcasts/", PodcastsExploreView.as_view(), name="podcasts-explore"),
+    path("podcasts/famous/", PodcastsExploreView.as_view(), name="podcasts-famous"),
     path("telecast/", LiveTelecastView.as_view(), name="live-telecast"),
     path("markets/", MarketQuotesView.as_view(), name="market-quotes"),
     path("genres/", GenreListView.as_view(), name="genre-list"),

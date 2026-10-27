@@ -1332,3 +1332,35 @@ class PingView(APIView):
             "cached_feeds": len(_FEED_MEM_CACHE),
             "message": "OmniNews Cloud is active and ready",
         }, status=status.HTTP_200_OK)
+
+
+class PodcastsExploreView(APIView):
+    """
+    Multi-Platform, Multi-Language Famous Podcast API:
+    Fetches trending and famous podcasts from Apple Podcasts, BBC, NPR, Spotify/Anchor
+    across multiple languages (English, Hindi, Spanish, French, German, Japanese, Arabic).
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        from .podcast_service import get_famous_podcasts
+
+        language = request.query_params.get("language", "all").strip().lower()
+        platform = request.query_params.get("platform", "all").strip().lower()
+        category = request.query_params.get("category", "all").strip()
+        query = request.query_params.get("q", "") or request.query_params.get("search", "")
+        limit_param = request.query_params.get("limit", "25")
+        try:
+            limit = int(limit_param)
+        except ValueError:
+            limit = 25
+
+        data = get_famous_podcasts(
+            language=language,
+            platform=platform,
+            category=category,
+            query=query,
+            limit=limit,
+        )
+        return Response(data, status=status.HTTP_200_OK)
+
