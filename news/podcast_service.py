@@ -511,11 +511,13 @@ def get_famous_podcasts(
 
     episodes: List[Dict[str, Any]] = []
 
-    # 1. RSS Feeds (BBC, NPR, Spotify/Anchor) if matched
+    # 1. RSS Feeds (BBC, NPR, Spotify/Anchor, Podcast Index) if matched
+    norm_plat = platform.lower().replace(" ", "").replace("_", "")
     for (feed_lang, feed_plat), feed_info in CURATED_RSS_FEEDS.items():
         if language not in ("all", feed_lang):
             continue
-        if platform not in ("all", feed_plat, "rss"):
+        norm_feed_plat = feed_plat.lower().replace(" ", "").replace("_", "")
+        if norm_plat not in ("all", "rss", norm_feed_plat):
             continue
         if category != "all" and category.lower() not in feed_info.get("category", "").lower():
             continue
@@ -572,9 +574,10 @@ def get_famous_podcasts(
 
     # Filter by platform if requested
     if platform != "all":
+        norm_filter = platform.lower().replace(" ", "").replace("_", "")
         episodes = [
             ep for ep in episodes
-            if platform.lower() in ep.get("platform", "").lower()
+            if norm_filter in ep.get("platform", "").lower().replace(" ", "").replace("_", "")
         ]
 
     # Filter by search query if requested
