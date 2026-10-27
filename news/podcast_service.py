@@ -154,6 +154,9 @@ def _fetch_rss_feed(info: Dict[str, Any], max_items: int = 3) -> List[Dict[str, 
             if itunes_img is not None and itunes_img.get("href"):
                 channel_img = itunes_img.get("href")
 
+            if channel_img and channel_img.startswith("http://"):
+                channel_img = "https://" + channel_img[7:]
+
             count = 0
             for item in channel.findall("item"):
                 if count >= max_items:
@@ -172,6 +175,9 @@ def _fetch_rss_feed(info: Dict[str, Any], max_items: int = 3) -> List[Dict[str, 
                 audio_url = enclosure.get("url") if enclosure is not None else ""
                 if not audio_url or not (audio_url.endswith(".mp3") or ".mp3" in audio_url or ".m4a" in audio_url):
                     continue
+
+                if audio_url.startswith("http://"):
+                    audio_url = "https://" + audio_url[7:]
 
                 duration_text = item.findtext("{http://www.itunes.com/dtds/podcast-1.0.dtd}duration") or "12:00"
                 duration_seconds = 720
@@ -240,11 +246,15 @@ def _fetch_apple_podcasts(
                 audio_url = r.get("episodeUrl") or ""
                 if not audio_url:
                     continue
+                if audio_url.startswith("http://"):
+                    audio_url = "https://" + audio_url[7:]
 
                 track_title = r.get("trackName") or "Episode"
                 podcast_name = r.get("collectionName") or "Apple Podcasts"
                 host = r.get("artistName") or "Creator"
                 img = r.get("artworkUrl600") or r.get("artworkUrl160") or ""
+                if img.startswith("http://"):
+                    img = "https://" + img[7:]
                 desc = (r.get("description") or track_title).strip()
                 if "<" in desc and ">" in desc:
                     import re
