@@ -1355,57 +1355,48 @@ class PodcastsExploreView(APIView):
         except ValueError:
             limit = 25
 
-        pi_key = (
-            request.headers.get("X-Podcast-Index-Key")
-            or request.query_params.get("api_key")
-            or request.query_params.get("pi_key")
-        )
-        pi_secret = (
-            request.headers.get("X-Podcast-Index-Secret")
-            or request.query_params.get("api_secret")
-            or request.query_params.get("pi_secret")
-        )
-
         data = get_famous_podcasts(
             language=language,
             platform=platform,
             category=category,
             query=query,
             limit=limit,
-            podcast_index_key=pi_key,
-            podcast_index_secret=pi_secret,
         )
         return Response(data, status=status.HTTP_200_OK)
 
 
-class PodcastIndexStatusView(APIView):
+class ApplePodcastsSearchView(APIView):
     """
-    Check status of Podcast Index API integration and test API credentials.
+    Direct Apple iTunes Search & Top Charts API proxy:
+    Endpoint: https://itunes.apple.com/search?term={term}&entity={entity}&limit={limit}
     """
     permission_classes = [permissions.AllowAny]
 
     def get(self, request):
-        import os
-        has_server_keys = bool(
-            os.environ.get("PODCAST_INDEX_KEY") or os.environ.get("PODCASTINDEX_API_KEY")
+        import urllib.request
+        import urllib.parse
+        import json
+
+        term = request.query_params.get("term", "technology").strip()
+        entity = request.query_params.get("entity", "podcast").strip()
+        country = request.query_params.get("country", "us").strip()
+        limit = request.query_params.get("limit", "25").strip()
+
+        url = (
+            f"https://itunes.apple.com/search?media=podcast&entity={entity}"
+            f"&term={urllib.parse.quote_plus(term)}&country={country}&limit={limit}"
         )
-        return Response({
-            "status": "success",
-            "provider": "Podcast Index (Podcasting 2.0)",
-            "server_configured": has_server_keys,
-            "docs": "https://podcastindex.org",
-            "signup_url": "https://api.podcastindex.org/signup",
-        }, status=status.HTTP_200_OK)
-
-    def post(self, request):
-        from .podcast_service import test_podcastindex_credentials
-        api_key = request.data.get("api_key") or request.headers.get("X-Podcast-Index-Key")
-        api_secret = request.data.get("api_secret") or request.headers.get("X-Podcast-Index-Secret")
-
-        valid, msg = test_podcastindex_credentials(api_key, api_secret)
-        return Response({
-            "status": "success" if valid else "error",
-            "valid": valid,
-            "message": msg,
-        }, status=status.HTTP_200_OK if valid else status.HTTP_400_BAD_REQUEST)
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={"User-Agent": "OmniNews/2.0 (+https://omninewsproject.vercel.app)"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                return Response(data, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(
+                {"error": f"Apple iTunes search failed: {e}", "resultCount": 0, "results": []},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
 

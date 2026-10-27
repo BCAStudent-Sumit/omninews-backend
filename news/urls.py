@@ -18,15 +18,14 @@ from .views import (
     ArticleTranslateView,
     PingView,
     PodcastsExploreView,
-    PodcastIndexStatusView,
+    ApplePodcastsSearchView,
 )
 
 urlpatterns = [
     path("ping/", PingView.as_view(), name="ping"),
     path("podcasts/", PodcastsExploreView.as_view(), name="podcasts-explore"),
     path("podcasts/famous/", PodcastsExploreView.as_view(), name="podcasts-famous"),
-    path("podcasts/podcastindex/", PodcastIndexStatusView.as_view(), name="podcastindex-status"),
-    path("podcasts/podcastindex/test/", PodcastIndexStatusView.as_view(), name="podcastindex-test"),
+    path("podcasts/apple/", ApplePodcastsSearchView.as_view(), name="apple-podcasts-search"),
     path("telecast/", LiveTelecastView.as_view(), name="live-telecast"),
     path("markets/", MarketQuotesView.as_view(), name="market-quotes"),
     path("genres/", GenreListView.as_view(), name="genre-list"),

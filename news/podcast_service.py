@@ -77,16 +77,16 @@ CURATED_RSS_FEEDS = {
         "feedUrl": "https://feeds.npr.org/510315/podcast.xml",
         "defaultImage": "https://images.unsplash.com/photo-1516251193007-45ef944ab0c6?w=800&auto=format&fit=crop&q=80",
     },
-    # Podcasting 2.0 / Podcast Index
-    ("en", "podcastindex"): {
-        "podcastName": "Podcasting 2.0",
-        "host": "Adam Curry & Dave Jones",
-        "category": "Technology & AI",
+    # Top Apple Podcasts
+    ("en", "apple"): {
+        "podcastName": "The Daily",
+        "host": "The New York Times",
+        "category": "World News",
         "language": "English",
         "languageCode": "en",
-        "platform": "Podcast Index",
-        "feedUrl": "https://mp3s.nashownotes.com/pc20rss.xml",
-        "defaultImage": "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?w=800&auto=format&fit=crop&q=80",
+        "platform": "Apple Podcasts",
+        "feedUrl": "https://feeds.simplecast.com/54nAGcIl",
+        "defaultImage": "https://images.unsplash.com/photo-1585829365295-ab7cd400c167?w=800&auto=format&fit=crop&q=80",
     },
 }
 
@@ -318,165 +318,79 @@ def _fetch_apple_podcasts(
     return results
 
 
-def test_podcastindex_credentials(api_key: str, api_secret: str) -> tuple[bool, str]:
-    """Test Podcast Index API credentials against api.podcastindex.org."""
-    if not api_key or not api_secret:
-        return False, "API Key and API Secret are required"
-    k = api_key.strip()
-    s = api_secret.strip()
-    epoch_time = str(int(time.time()))
-    data_to_hash = k + s + epoch_time
-    auth_hash = hashlib.sha1(data_to_hash.encode("utf-8")).hexdigest()
-    headers = {
-        "User-Agent": "OmniNews/2.0 (+https://omninewsproject.vercel.app)",
-        "X-Auth-Date": epoch_time,
-        "X-Auth-Key": k,
-        "Authorization": auth_hash,
-    }
-    try:
-        req = urllib.request.Request(
-            "https://api.podcastindex.org/api/1.0/recent/episodes?max=1",
-            headers=headers,
-        )
-        with urllib.request.urlopen(req, timeout=8) as r:
-            return True, "Successfully authenticated with Podcast Index API"
-    except urllib.error.HTTPError as e:
-        if e.code == 401:
-            return False, "Authentication failed: invalid Podcast Index API Key or Secret"
-        return False, f"Podcast Index HTTP error {e.code}"
-    except Exception as e:
-        return False, f"Connection failed: {e}"
-
-
-def _fetch_podcastindex(
-    query: str = "",
-    category: str = "all",
-    language: str = "all",
+def _fetch_apple_shows(
+    term: str,
+    country: str = "us",
+    lang_name: str = "English",
+    lang_code: str = "en",
+    category: str = "Technology & AI",
     limit: int = 15,
-    api_key: Optional[str] = None,
-    api_secret: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Query official Podcast Index API (Podcasting 2.0 - api.podcastindex.org)."""
-    key = api_key or os.environ.get("PODCAST_INDEX_KEY") or os.environ.get("PODCASTINDEX_API_KEY")
-    secret = api_secret or os.environ.get("PODCAST_INDEX_SECRET") or os.environ.get("PODCASTINDEX_API_SECRET")
-
-    if not key or not secret:
-        return []
-
-    k = key.strip()
-    s = secret.strip()
-    epoch_time = str(int(time.time()))
-    data_to_hash = k + s + epoch_time
-    auth_hash = hashlib.sha1(data_to_hash.encode("utf-8")).hexdigest()
-
-    headers = {
-        "User-Agent": "OmniNews/2.0 (+https://omninewsproject.vercel.app)",
-        "X-Auth-Date": epoch_time,
-        "X-Auth-Key": k,
-        "Authorization": auth_hash,
-    }
-
+    """
+    Search Apple iTunes for top podcast shows (entity=podcast)
+    as requested: GET https://itunes.apple.com/search?term={term}&entity=podcast&limit={limit}
+    and lookup each show's playable episode audio stream via iTunes Lookup API.
+    """
+    url = (
+        f"https://itunes.apple.com/search?media=podcast&entity=podcast"
+        f"&term={urllib.parse.quote_plus(term)}&country={country}&limit={limit}"
+    )
     results = []
     try:
-        if query.strip():
-            url = f"https://api.podcastindex.org/api/1.0/search/byterm?q={urllib.parse.quote_plus(query.strip())}&max={limit}"
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                for feed in data.get("feeds", [])[:min(limit, 5)]:
-                    feed_id = feed.get("id")
-                    if not feed_id:
-                        continue
-                    feed_title = feed.get("title") or "Podcast"
-                    feed_author = feed.get("author") or feed.get("ownerName") or "Creator"
-                    feed_img = feed.get("artwork") or feed.get("image") or ""
-                    if feed_img.startswith("http://"):
-                        feed_img = "https://" + feed_img[7:]
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "OmniNews/2.0 (+https://omninewsproject.vercel.app)"},
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            shows = data.get("results", [])
+            for show in shows[:min(limit, 8)]:
+                coll_id = show.get("collectionId")
+                if not coll_id:
+                    continue
 
-                    ep_url = f"https://api.podcastindex.org/api/1.0/episodes/byfeedid?id={feed_id}&max=2"
-                    try:
-                        ep_req = urllib.request.Request(ep_url, headers=headers)
-                        with urllib.request.urlopen(ep_req, timeout=6) as ep_resp:
-                            ep_data = json.loads(ep_resp.read().decode("utf-8"))
-                            for item in ep_data.get("items", []):
-                                audio_url = item.get("enclosureUrl") or ""
-                                if not audio_url:
-                                    continue
-                                if audio_url.startswith("http://"):
-                                    audio_url = "https://" + audio_url[7:]
-                                ep_img = item.get("image") or feed_img
-                                if ep_img.startswith("http://"):
-                                    ep_img = "https://" + ep_img[7:]
+                lookup_url = f"https://itunes.apple.com/lookup?id={coll_id}&entity=podcastEpisode&limit=2"
+                try:
+                    l_req = urllib.request.Request(lookup_url, headers={"User-Agent": "OmniNews/2.0"})
+                    with urllib.request.urlopen(l_req, timeout=6) as l_resp:
+                        l_data = json.loads(l_resp.read().decode("utf-8"))
+                        for ep in l_data.get("results", [])[1:]:
+                            audio_url = ep.get("episodeUrl") or ""
+                            if not audio_url:
+                                continue
+                            if audio_url.startswith("http://"):
+                                audio_url = "https://" + audio_url[7:]
+                            img = ep.get("artworkUrl600") or show.get("artworkUrl600") or show.get("artworkUrl100") or ""
+                            if img.startswith("http://"):
+                                img = "https://" + img[7:]
 
-                                duration_sec = int(item.get("duration") or 600)
-                                desc = (item.get("description") or item.get("title") or "").strip()
-                                if "<" in desc and ">" in desc:
-                                    import re
-                                    desc = re.sub(r"<[^>]+>", "", desc).strip()
+                            track_title = ep.get("trackName") or show.get("collectionName")
+                            time_millis = ep.get("trackTimeMillis") or 0
+                            duration_seconds = time_millis // 1000 if time_millis > 0 else 720
+                            date_str = (ep.get("releaseDate") or "Today")[:10]
 
-                                results.append({
-                                    "id": f"pindex_{item.get('id')}",
-                                    "title": item.get("title") or "Episode",
-                                    "podcastName": feed_title,
-                                    "host": feed_author,
-                                    "category": category if category != "all" else "World News",
-                                    "language": feed.get("language") or "English",
-                                    "languageCode": (feed.get("language") or "en")[:2],
-                                    "platform": "Podcast Index",
-                                    "duration": _format_duration(duration_sec),
-                                    "durationSeconds": duration_sec,
-                                    "audioUrl": audio_url,
-                                    "imageUrl": ep_img,
-                                    "description": desc[:320] if len(desc) > 320 else desc,
-                                    "publishedDate": item.get("datePublishedPretty") or "Recently",
-                                    "listensCount": f"{30 + (abs(hash(str(item.get('id')))) % 90)}.5K listens",
-                                    "tags": ["Podcasting 2.0", "Podcast Index", "Open Directory"],
-                                })
-                    except Exception as err:
-                        logger.warning("Error fetching episodes for feed %s: %s", feed_id, err)
-        else:
-            lang_param = f"&lang={language}" if language != "all" else ""
-            url = f"https://api.podcastindex.org/api/1.0/recent/episodes?max={limit}&fulltext=true{lang_param}"
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                for item in data.get("items", []):
-                    audio_url = item.get("enclosureUrl") or ""
-                    if not audio_url:
-                        continue
-                    if audio_url.startswith("http://"):
-                        audio_url = "https://" + audio_url[7:]
-
-                    img = item.get("image") or item.get("feedImage") or ""
-                    if img.startswith("http://"):
-                        img = "https://" + img[7:]
-
-                    duration_sec = int(item.get("duration") or 600)
-                    desc = (item.get("description") or item.get("title") or "").strip()
-                    if "<" in desc and ">" in desc:
-                        import re
-                        desc = re.sub(r"<[^>]+>", "", desc).strip()
-
-                    results.append({
-                        "id": f"pindex_{item.get('id')}",
-                        "title": item.get("title") or "Episode",
-                        "podcastName": item.get("feedTitle") or "Podcast Index",
-                        "host": item.get("feedAuthor") or "Podcasting 2.0",
-                        "category": category if category != "all" else "World News",
-                        "language": item.get("feedLanguage") or "English",
-                        "languageCode": (item.get("feedLanguage") or "en")[:2],
-                        "platform": "Podcast Index",
-                        "duration": _format_duration(duration_sec),
-                        "durationSeconds": duration_sec,
-                        "audioUrl": audio_url,
-                        "imageUrl": img,
-                        "description": desc[:320] if len(desc) > 320 else desc,
-                        "publishedDate": item.get("datePublishedPretty") or "Today",
-                        "listensCount": f"{25 + (abs(hash(str(item.get('id')))) % 100)}.2K listens",
-                        "tags": ["Podcasting 2.0", "Podcast Index", "Open Directory"],
-                    })
+                            results.append({
+                                "id": f"apple_{ep.get('trackId') or abs(hash(audio_url)) % 100000000}",
+                                "title": track_title,
+                                "podcastName": show.get("collectionName") or "Apple Podcasts",
+                                "host": show.get("artistName") or "Creator",
+                                "category": category,
+                                "language": lang_name,
+                                "languageCode": lang_code,
+                                "platform": "Apple Podcasts",
+                                "duration": _format_duration(duration_seconds),
+                                "durationSeconds": duration_seconds,
+                                "audioUrl": audio_url,
+                                "imageUrl": img,
+                                "description": (ep.get("description") or track_title).strip()[:320],
+                                "publishedDate": date_str,
+                                "listensCount": f"{45 + (abs(hash(str(coll_id))) % 180)}.5K listens",
+                                "tags": [category.split(" ")[0], lang_name, "Apple Podcasts", "Top Charts"],
+                            })
+                except Exception as err:
+                    logger.debug("Error looking up episode for show %s: %s", coll_id, err)
     except Exception as e:
-        logger.warning("Error querying Podcast Index API: %s", e)
+        logger.warning("Error querying iTunes search for term %s: %s", term, e)
 
     return results
 
@@ -487,14 +401,11 @@ def get_famous_podcasts(
     category: str = "all",
     query: str = "",
     limit: int = 25,
-    podcast_index_key: Optional[str] = None,
-    podcast_index_secret: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Main aggregator for fetching famous podcasts from multiple platforms and languages.
+    Main aggregator for fetching famous podcasts powered by Apple iTunes Search & Top Charts API.
     """
-    has_custom_pi = bool(podcast_index_key and podcast_index_secret)
-    cache_key = f"{language.lower()}_{platform.lower()}_{category.lower()}_{query.lower().strip()}_{limit}_{has_custom_pi}"
+    cache_key = f"{language.lower()}_{platform.lower()}_{category.lower()}_{query.lower().strip()}_{limit}"
     now = time.time()
 
     if cache_key in _PODCAST_CACHE:
@@ -536,34 +447,42 @@ def get_famous_podcasts(
         country = meta["country"]
         lang_name = meta["name"]
 
-        if query.strip():
-            terms = [query.strip()]
+        # Search term or category
+        search_term = query.strip()
+        if not search_term and category != "all":
+            search_term = category
+
+        if search_term:
+            terms = [search_term]
         else:
             terms = meta["default_terms"][:2]
 
         for term in terms:
             if len(episodes) >= limit * 2:
                 break
-            items = _fetch_apple_podcasts(
+            # 2a. Fetch playable episodes (entity=podcastEpisode)
+            ep_items = _fetch_apple_podcasts(
                 term=term,
                 country=country,
                 lang_name=lang_name,
                 lang_code=lang_code,
-                limit=3 if language == "all" else 6,
+                category=category if category != "all" else "Technology & AI",
+                limit=6 if search_term else (3 if language == "all" else 6),
             )
-            episodes.extend(items)
+            episodes.extend(ep_items)
 
-    # 3. Podcast Index API (Podcasting 2.0 - api.podcastindex.org)
-    if platform in ("all", "podcastindex", "podcast_index"):
-        pi_items = _fetch_podcastindex(
-            query=query,
-            category=category,
-            language=language,
-            limit=limit if platform in ("podcastindex", "podcast_index") else 8,
-            api_key=podcast_index_key,
-            api_secret=podcast_index_secret,
-        )
-        episodes.extend(pi_items)
+            # 2b. Fetch top podcast shows (entity=podcast)
+            # GET https://itunes.apple.com/search?term=technology&entity=podcast&limit=25
+            if len(episodes) < limit:
+                show_items = _fetch_apple_shows(
+                    term=term,
+                    country=country,
+                    lang_name=lang_name,
+                    lang_code=lang_code,
+                    category=category if category != "all" else "Technology & AI",
+                    limit=4,
+                )
+                episodes.extend(show_items)
 
     # Filter by category if requested
     if category != "all":
@@ -612,6 +531,6 @@ def get_famous_podcasts(
         "count": len(final_list),
         "language": language,
         "platform": platform,
-        "podcast_index_configured": bool(podcast_index_key or os.environ.get("PODCAST_INDEX_KEY")),
+        "provider": "Apple iTunes Search & Top Charts API",
         "results": final_list,
     }
