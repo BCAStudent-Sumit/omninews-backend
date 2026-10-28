@@ -1,5 +1,6 @@
 import time
 _FEED_MEM_CACHE = {}
+import rest_framework.throttling
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from django.db import transaction
@@ -824,8 +825,9 @@ class PublishArticleView(generics.CreateAPIView):
 class TriggerFetchNewsView(APIView):
     """
     On-demand endpoint to trigger an immediate background news fetch from RSS providers.
+    Requires a logged-in account to prevent abuse / DoS by anonymous visitors.
     """
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
     @extend_schema(request=None, responses={202: None})
     def post(self, request, *args, **kwargs):
@@ -850,10 +852,63 @@ class ImageProxyView(APIView):
     """
     permission_classes = [permissions.AllowAny]
 
+    # Known-safe image CDN hostnames. Extend this list rather than allowing all.
+    _ALLOWED_IMAGE_HOSTS = {
+        'images.bbc.co.uk', 'ichef.bbci.co.uk',
+        'static.toiimg.com', 'resize.indiatimes.com',
+        'images.hindustantimes.com',
+        'cdn.ndtv.com', 'ndtvimg.com',
+        'images.news18.com',
+        'images.cnbctv18.com',
+        'i.ndtvimg.com',
+        'akm-img-a-in.tosshub.com',
+        'techcrunch.com', 'cdn.mos.cms.futurecdn.net',
+        'media.wired.com', 'images.theverge.com',
+        'media-cldnry.s3-website-us-east-1.amazonaws.com',
+        'static01.nyt.com', 'www.reuters.com',
+        'media.npr.org', 's.abcnews.com',
+        'gdb.voanews.com', 'www.aljazeera.com',
+        'storage.googleapis.com', 'lh3.googleusercontent.com',
+        'upload.wikimedia.org', 'cloudfront.net',
+        'akamaized.net',
+    }
+    _MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB cap
+
+    def _is_safe_image_url(self, url: str) -> bool:
+        """Return False for private/internal IPs or non-allowed hosts (SSRF prevention)."""
+        import urllib.parse
+        import ipaddress
+        try:
+            parsed = urllib.parse.urlparse(url)
+            hostname = (parsed.hostname or '').lower().strip('.')
+            if not hostname:
+                return False
+            # Check if hostname is in the approved CDN list OR a sub-domain of one
+            approved = any(
+                hostname == h or hostname.endswith('.' + h)
+                for h in self._ALLOWED_IMAGE_HOSTS
+            )
+            if not approved:
+                return False
+            # Block requests that resolve to private/loopback/link-local addresses
+            try:
+                addr = ipaddress.ip_address(hostname)
+                if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+                    return False
+            except ValueError:
+                pass  # It's a hostname, not a raw IP â€” already checked via allowlist above
+            return True
+        except Exception:
+            return False
+
     def get(self, request):
         target_url = request.query_params.get("url")
         if not target_url or not target_url.startswith(("http://", "https://")):
             return HttpResponse(status=400)
+
+        # SSRF guard: only fetch from pre-approved image CDN hostnames
+        if not self._is_safe_image_url(target_url):
+            return HttpResponse(status=403)
 
         try:
             req = urllib.request.Request(
@@ -865,7 +920,10 @@ class ImageProxyView(APIView):
                 }
             )
             with urllib.request.urlopen(req, timeout=8) as resp:
-                content = resp.read()
+                # Size cap: read at most _MAX_IMAGE_BYTES to prevent memory exhaustion
+                content = resp.read(self._MAX_IMAGE_BYTES)
+                if len(content) == self._MAX_IMAGE_BYTES:
+                    return HttpResponse(status=413)  # Payload Too Large
                 raw_ct = resp.headers.get("Content-Type", "")
                 content_type = raw_ct.split(";")[0].strip().lower() if raw_ct else ""
 
@@ -907,12 +965,21 @@ from .ai_service import (
 
 class AiStatusView(APIView):
     """
-    Checks the status of Google Gemini integration and allows updating the API key.
+    GET:  Public â€“ returns current Gemini integration health (no secrets exposed).
+    POST: Admin-only â€“ updates the active Gemini API key.
+          Locked to IsAdminUser so random visitors cannot replace your production key.
     """
-    permission_classes = [permissions.AllowAny]
+
+    def get_permissions(self):
+        if self.request.method == 'POST':
+            return [permissions.IsAdminUser()]
+        return [permissions.AllowAny()]
 
     def get(self, request):
-        return Response(get_gemini_status(), status=status.HTTP_200_OK)
+        # Never leak the raw key in the status response
+        info = get_gemini_status()
+        info.pop('api_key', None)
+        return Response(info, status=status.HTTP_200_OK)
 
     def post(self, request):
         api_key = request.data.get("api_key", "").strip()
@@ -922,13 +989,20 @@ class AiStatusView(APIView):
         return Response(result, status=status_code)
 
 
+class AiAssistThrottle(rest_framework.throttling.AnonRateThrottle):
+    """Tight per-IP limit for the AI assist endpoint to protect Gemini quota."""
+    rate = '20/min'
+
+
 class AiAssistView(APIView):
     """
     OmniAI Assistant Endpoint:
     Powered by Google Gemini with automatic multi-lingual summaries, bullet takeaways,
     conversational regional voice narration, and interactive news Q&A.
+    Throttled to 20 req/min per anonymous IP to protect Gemini quota.
     """
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [AiAssistThrottle]
 
     def post(self, request):
         article_id = request.data.get("article_id")

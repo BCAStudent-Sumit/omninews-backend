@@ -22,11 +22,22 @@ load_dotenv(BASE_DIR / '.env')
 
 SECRET_KEY = os.environ["SECRET_KEY"]
 
-DEBUG = True
+# Read DEBUG from env; Render sets DEBUG=False in environment variables.
+DEBUG = os.environ.get('DEBUG', 'False').strip().lower() in ('1', 'true', 'yes')
 
 
 
-ALLOWED_HOSTS = ['127.0.0.1', 'localhost', '10.0.2.2', '.onrender.com', '.vercel.app', '*']
+ALLOWED_HOSTS = [
+    '127.0.0.1',
+    'localhost',
+    '10.0.2.2',
+    '.onrender.com',
+    '.vercel.app',
+    'omninewsproject.vercel.app',
+]
+# Allow wildcard only when running locally (DEBUG=True is never set on Render)
+if DEBUG:
+    ALLOWED_HOSTS.append('*')
 
 
 
@@ -279,6 +290,14 @@ REST_FRAMEWORK = {
 
     'PAGE_SIZE': 20,
 
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '60/min',
+        'user': '300/min',
+    },
 }
 
 
@@ -314,7 +333,14 @@ SIMPLE_JWT = {
 
 
 # CORS Configuration - Allow all origins so Vercel, mobile, and web connect seamlessly
-CORS_ALLOW_ALL_ORIGINS = True
+# Lock CORS to explicit origins in production
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:3000',
+    'http://localhost:8080',
+    'http://127.0.0.1:8000',
+    'https://omninewsproject.vercel.app',
+]
+CORS_ALLOW_ALL_ORIGINS = DEBUG  # True only in local dev
 CORS_ALLOW_CREDENTIALS = True
 
 

