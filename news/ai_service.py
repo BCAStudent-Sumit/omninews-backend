@@ -333,7 +333,7 @@ def get_gemini_model(passed_model: str = None) -> str:
     """Returns the configured Gemini model name."""
     if passed_model and passed_model.strip():
         return passed_model.strip()
-    return getattr(settings, "GEMINI_MODEL", "") or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    return getattr(settings, "GEMINI_MODEL", "") or os.environ.get("GEMINI_MODEL", "gemini-flash-lite-latest")
 
 
 def get_gemini_status() -> dict:
@@ -348,13 +348,10 @@ def get_gemini_status() -> dict:
         "model": model,
         "provider": f"Google Gemini ({model})" if has_key else "OmniAI Neural Engine",
         "supported_models": [
-            "gemini-2.5-flash",
-            "gemini-2.0-flash",
-            "gemini-2.0-flash-lite",
-            "gemini-1.5-flash",
-            "gemini-1.5-pro",
+            "gemini-flash-lite-latest",
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-flash-lite",
             "gemini-flash-latest",
-            "gemini-pro-latest",
         ],
         "status": "ready" if has_key else "fallback_active",
         "sdk_available": HAS_GENAI_LIB,
@@ -427,13 +424,10 @@ def test_gemini_key(api_key: str, model: str = None) -> dict:
     requested_model = (model or get_gemini_model()).strip()
     candidates = [
         requested_model,
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro",
+        "gemini-flash-lite-latest",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
         "gemini-flash-latest",
-        "gemini-pro-latest",
     ]
     # Deduplicate while preserving order
     seen = set()
@@ -577,13 +571,10 @@ def generate_with_gemini(
     chosen_model = model or get_gemini_model()
     models_to_try = [chosen_model]
     for alt in [
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro",
+        "gemini-flash-lite-latest",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
         "gemini-flash-latest",
-        "gemini-pro-latest",
     ]:
         if alt not in models_to_try:
             models_to_try.append(alt)
