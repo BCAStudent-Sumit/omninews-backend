@@ -1,3 +1,4 @@
+import os
 import time
 _FEED_MEM_CACHE = {}
 import rest_framework.throttling
@@ -870,25 +871,59 @@ class ImageProxyView(APIView):
 
     # Extend this set when adding a new image CDN — never use a wildcard.
     _ALLOWED_IMAGE_HOSTS: frozenset = frozenset({
-        # Indian news sources
-        'static.toiimg.com', 'resize.indiatimes.com', 'timesofindia.indiatimes.com',
-        'images.hindustantimes.com', 'www.hindustantimes.com',
-        'cdn.ndtv.com', 'ndtvimg.com', 'i.ndtvimg.com',
-        'images.news18.com', 'images.cnbctv18.com',
-        'akm-img-a-in.tosshub.com',
-        # Global news sources
-        'images.bbc.co.uk', 'ichef.bbci.co.uk',
-        'media.npr.org', 's.abcnews.com', 'gdb.voanews.com',
-        'static01.nyt.com', 'www.reuters.com', 'www.aljazeera.com',
-        # Tech news
-        'techcrunch.com', 'cdn.mos.cms.futurecdn.net',
-        'media.wired.com', 'images.theverge.com',
-        # Cloud / CDN infrastructure
-        'storage.googleapis.com', 'lh3.googleusercontent.com',
-        'upload.wikimedia.org',
-        'cloudfront.net', 'akamaized.net',
-        'media-cldnry.s3-website-us-east-1.amazonaws.com',
+        # Indian news sources & CDNs
+        'static.toiimg.com', 'resize.indiatimes.com', 'timesofindia.indiatimes.com', 'indiatimes.com',
+        'images.hindustantimes.com', 'www.hindustantimes.com', 'hindustantimes.com',
+        'cdn.ndtv.com', 'ndtvimg.com', 'i.ndtvimg.com', 'ndtv.com',
+        'images.news18.com', 'images.cnbctv18.com', 'news18.com', 'cnbctv18.com',
+        'akm-img-a-in.tosshub.com', 'tosshub.com', 'indiatoday.in', 'aajtak.in',
+        'thehindu.com', 'thgim.com', 'th-i.thgim.com', 'sportstar.thehindu.com',
+        'indianexpress.com', 'images.indianexpress.com',
+        'livemint.com', 'images.livemint.com',
+        'etimg.com', 'economictimes.indiatimes.com',
+        'business-standard.com', 'bsmedia.business-standard.com',
+        'firstpost.com', 'images.firstpost.com',
+        'moneycontrol.com', 'images.moneycontrol.com',
+        'deccanherald.com', 'tribuneindia.com', 'telegraphindia.com',
+        'theprint.in', 'thewire.in', 'scroll.in',
+        'aninews.in', 'ptinews.com',
+        'assettype.com', 'gumlet.assettype.com',
+        'abplive.com', 'zeenews.india.com',
+
+        # Global news sources & CDNs
+        'cnn.com', 'cdn.cnn.com', 'edition.cnn.com',
+        'theguardian.com', 'guim.co.uk', 'i.guim.co.uk',
+        'bbc.com', 'bbc.co.uk', 'bbci.co.uk', 'images.bbc.co.uk', 'ichef.bbci.co.uk',
+        'media.npr.org', 'npr.org', 's.abcnews.com', 'abcnews.com',
+        'gdb.voanews.com', 'voanews.com',
+        'static01.nyt.com', 'nytimes.com', 'www.reuters.com', 'reuters.com',
+        'www.aljazeera.com', 'aljazeera.com',
+        'apnews.com', 'bloomberg.com', 'wsj.com', 'washingtonpost.com',
+        'time.com', 'forbes.com', 'cbsnews.com', 'nbcnews.com', 'foxnews.com', 'usatoday.com',
+
+        # Tech & Sports news
+        'techcrunch.com', 'cdn.mos.cms.futurecdn.net', 'futurecdn.net',
+        'media.wired.com', 'wired.com',
+        'images.theverge.com', 'theverge.com', 'vox-cdn.com',
+        'arstechnica.com', 'engadget.com', 'cnet.com', 'zdnet.com', 'gsmarena.com', 'venturebeat.com',
+        'espn.com', 'espncricinfo.com', 'hscicdn.com', 'cricbuzz.com', 'goal.com',
+
+        # Cloud & Content Delivery Infrastructure
+        'storage.googleapis.com', 'googleusercontent.com', 'lh3.googleusercontent.com',
+        'gstatic.com', 'encrypted-tbn0.gstatic.com',
+        'upload.wikimedia.org', 'wikimedia.org', 'wikipedia.org',
+        'cloudfront.net', 'akamaized.net', 'fastly.net',
+        'wp.com', 'unsplash.com', 'images.unsplash.com', 'imgur.com',
+        'media-cldnry.s3-website-us-east-1.amazonaws.com', 'amazonaws.com',
     })
+
+    @classmethod
+    def get_allowed_hosts(cls) -> frozenset:
+        extra = os.getenv('IMAGE_PROXY_EXTRA_HOSTS', '')
+        if extra:
+            extras = {h.strip().lower() for h in extra.split(',') if h.strip()}
+            return cls._ALLOWED_IMAGE_HOSTS | extras
+        return cls._ALLOWED_IMAGE_HOSTS
 
     # FIX 7: 5 MB hard cap — prevents memory exhaustion on slow/large responses.
     _MAX_IMAGE_BYTES: int = 5 * 1024 * 1024
@@ -931,11 +966,19 @@ class ImageProxyView(APIView):
                 pass  # It is a hostname, not a bare IP — continue to allowlist check.
 
             # Must be an exact match or a subdomain of an approved host.
+            allowed_hosts = self.get_allowed_hosts()
             approved = any(
                 hostname == h or hostname.endswith('.' + h)
-                for h in self._ALLOWED_IMAGE_HOSTS
+                for h in allowed_hosts
             )
-            return approved
+            if approved:
+                return True
+
+            if os.getenv('IMAGE_PROXY_ALLOW_ALL_PUBLIC', 'false').lower() in ('true', '1'):
+                from news.ai_service import validate_safe_url
+                return validate_safe_url(url)
+
+            return False
 
         except Exception:
             return False

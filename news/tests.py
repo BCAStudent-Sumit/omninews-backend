@@ -522,6 +522,9 @@ class ImageProxySSRFTest(APITestCase):
         self.assertTrue(view._is_safe_url('https://ichef.bbci.co.uk/news/img.jpg'))
         self.assertTrue(view._is_safe_url('https://static.toiimg.com/photo.jpg'))
         self.assertTrue(view._is_safe_url('https://upload.wikimedia.org/img.png'))
+        self.assertTrue(view._is_safe_url('https://cdn.cnn.com/cnnnext/dam/assets/photo.jpg'))
+        self.assertTrue(view._is_safe_url('https://i.guim.co.uk/img/media/photo.jpg'))
+        self.assertTrue(view._is_safe_url('https://th-i.thgim.com/public/incoming/photo.jpg'))
 
     def test_subdomain_of_allowed_host_passes(self):
         """Subdomains of allowed hosts must also pass."""
