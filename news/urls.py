@@ -19,9 +19,13 @@ from .views import (
     PingView,
     PodcastsExploreView,
     ApplePodcastsSearchView,
+    VoiceAssistantView,
+    SummarizeLinkView,
 )
 
 urlpatterns = [
+    path("voice-assistant/", VoiceAssistantView.as_view(), name="voice-assistant"),
+    path("summarize-link/", SummarizeLinkView.as_view(), name="summarize-link"),
     path("ping/", PingView.as_view(), name="ping"),
     path("podcasts/", PodcastsExploreView.as_view(), name="podcasts-explore"),
     path("podcasts/famous/", PodcastsExploreView.as_view(), name="podcasts-famous"),

@@ -1524,3 +1524,109 @@ class ApplePodcastsSearchView(APIView):
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
+
+
+# =============================================================================
+# Voice Assistant & Link Summarizer Views
+# =============================================================================
+
+class VoiceAssistantThrottle(rest_framework.throttling.UserRateThrottle):
+    """Rate limit per authenticated user for voice assistant queries."""
+    scope = 'voice_assistant_user'
+
+
+class SummarizeLinkThrottle(rest_framework.throttling.AnonRateThrottle):
+    """Rate limit for URL link summarization requests."""
+    scope = 'summarize_link_anon'
+
+
+class VoiceAssistantView(APIView):
+    """
+    POST /api/news/voice-assistant/
+    Requires authentication & throttled.
+    Body: {text, language, article_id?}
+    Utilizes Gemini with Google Search Grounding for live queries (scores, weather, prices),
+    or routes to personalized feed summarization when asking about 'today's news' / 'my feed'.
+    Returns: {speech_text, display_text, sources[]}
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [VoiceAssistantThrottle]
+
+    def post(self, request):
+        text = str(request.data.get('text', '')).strip()
+        language = str(request.data.get('language', 'en')).strip()
+        article_id = request.data.get('article_id')
+        if article_id:
+            try:
+                article_id = int(article_id)
+            except (ValueError, TypeError):
+                article_id = None
+
+        if not text:
+            return Response(
+                {"detail": "The 'text' field is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        api_key = request.data.get('gemini_api_key') or request.headers.get('X-Gemini-Api-Key')
+        model = request.data.get('gemini_model')
+
+        from .ai_service import process_voice_assistant_query
+        result = process_voice_assistant_query(
+            text=text,
+            user=request.user,
+            language=language,
+            article_id=article_id,
+            api_key=api_key,
+            model=model,
+        )
+        return Response(result, status=status.HTTP_200_OK)
+
+
+class SummarizeLinkView(APIView):
+    """
+    POST /api/news/summarize-link/
+    Throttled.
+    Body: {url, language, length}
+    Validates URL (http/https only, blocks private IPs via SSRF defense),
+    tries url_context tool, falls back to requests + trafilatura, then summarizes with Gemini.
+    Returns: {status, url, title, summary, bullets, speech_text, estimated_read_time, sources, language}
+    """
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = [SummarizeLinkThrottle]
+
+    def post(self, request):
+        url = str(request.data.get('url', '')).strip()
+        language = str(request.data.get('language', 'en')).strip()
+        length = str(request.data.get('length', 'medium')).strip()
+
+        if not url:
+            return Response(
+                {"detail": "The 'url' parameter is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from .ai_service import validate_safe_url, summarize_web_link
+        if not validate_safe_url(url):
+            return Response(
+                {"detail": "Prohibited or invalid URL (only public http/https endpoints are allowed)."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        api_key = request.data.get('gemini_api_key') or request.headers.get('X-Gemini-Api-Key')
+        model = request.data.get('gemini_model')
+
+        try:
+            result = summarize_web_link(
+                url=url,
+                language=language,
+                length=length,
+                api_key=api_key,
+                model=model,
+            )
+            return Response(result, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(
+                {"detail": f"Failed to extract and summarize link: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )

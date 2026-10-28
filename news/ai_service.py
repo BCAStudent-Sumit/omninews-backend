@@ -853,3 +853,415 @@ def generate_omni_ai_assistance(
     if len(_AI_ASSISTANCE_CACHE) > 500:
         _AI_ASSISTANCE_CACHE.clear()
     return res_dict
+
+
+# =============================================================================
+# OmniAI Live Voice Assistant & Link Summarizer Services
+# =============================================================================
+
+import socket
+import ipaddress
+import urllib.parse
+import trafilatura
+import requests
+
+def validate_safe_url(url: str) -> bool:
+    """
+    SSRF Protection: Validates that url is http/https and does NOT resolve to
+    any loopback, private RFC-1918, link-local, multicast, or reserved IP address.
+    """
+    if not url or not isinstance(url, str):
+        return False
+    try:
+        parsed = urllib.parse.urlparse(url.strip())
+        if parsed.scheme not in ('http', 'https'):
+            return False
+        hostname = (parsed.hostname or '').lower().strip('.')
+        if not hostname:
+            return False
+
+        # Resolve all IPs for the hostname and ensure none are private or restricted
+        addr_info = socket.getaddrinfo(hostname, None)
+        for _, _, _, _, sockaddr in addr_info:
+            ip_str = sockaddr[0]
+            addr = ipaddress.ip_address(ip_str)
+            if (
+                addr.is_private
+                or addr.is_loopback
+                or addr.is_link_local
+                or addr.is_reserved
+                or addr.is_multicast
+                or addr.is_unspecified
+            ):
+                return False
+        return True
+    except Exception as e:
+        logger.warning(f"SSRF validation blocked URL {url}: {e}")
+        return False
+
+
+def process_voice_assistant_query(
+    text: str,
+    user=None,
+    language: str = 'en',
+    article_id: int = None,
+    api_key: str = None,
+    model: str = None,
+) -> dict:
+    """
+    OmniAI Voice Assistant Router & Execution Engine:
+    1. Router: 'summarize today's news / my feed' -> queries user's preferred articles & summarizes.
+    2. Article context: If article_id provided -> answers from specific article.
+    3. Live questions (scores, weather, prices, news) -> uses google-genai with GoogleSearch tool.
+    Returns: { 'speech_text': ..., 'display_text': ..., 'sources': [...] }
+    """
+    clean_query = (text or '').strip()
+    if not clean_query:
+        return {
+            'speech_text': "I am listening. How can I help you today?",
+            'display_text': "I'm listening! Ask me anything about today's news, live scores, weather, or financial markets.",
+            'sources': [],
+        }
+
+    key = get_gemini_api_key(api_key)
+    active_model = get_gemini_model(model)
+    lang_code = (language or 'en').split('_')[0].split('-')[0].lower()
+
+    # 1. Router: Detect feed / headlines summarization requests
+    feed_keywords_pattern = r'\b(summarize|summary|what(\'s| is)|tell me|brief|give me|read|show).*(today(\'s)? news|my feed|headlines|top news|daily update|news today|feed)\b'
+    is_feed_intent = bool(re.search(feed_keywords_pattern, clean_query, re.IGNORECASE))
+
+    if is_feed_intent and not article_id:
+        from news.models import Article
+        qs = Article.objects.all()
+
+        if user and getattr(user, 'is_authenticated', False):
+            if hasattr(user, 'genres') and user.genres.exists():
+                user_genre_ids = list(user.genres.values_list('id', flat=True))
+                if user_genre_ids:
+                    qs = qs.filter(genre_id__in=user_genre_ids)
+            preferred_city = getattr(user, 'preferred_city', '')
+            if preferred_city:
+                qs = qs.filter(Q(region__name__icontains=preferred_city) | Q(title__icontains=preferred_city))
+
+        articles = list(qs.order_by('-published_at', '-id')[:8])
+        if not articles:
+            articles = list(Article.objects.all().order_by('-published_at', '-id')[:8])
+
+        sources = [{'title': a.title, 'url': a.url} for a in articles[:6]]
+
+        articles_context = "\n\n".join([
+            f"Headline {i+1}: {a.title}\nSource: {a.source.name if a.source else 'Global Wire'}\nSnippet: {a.body[:250]}"
+            for i, a in enumerate(articles)
+        ])
+
+        if HAS_GENAI_LIB and key:
+            try:
+                client = genai.Client(api_key=key)
+                prompt = f"""You are OmniAI, a world-class broadcast news anchor.
+The user asked: "{clean_query}"
+Target language: {language}
+
+Below are the latest verified headlines from the user's news feed:
+{articles_context}
+
+Please generate:
+1. speech_text: A natural, spoken news briefing (around 3-4 sentences, conversational, warm, no asterisks, no raw URLs, designed to be read aloud via voice assistant).
+2. display_text: An organized markdown summary for the screen featuring key headlines and bullet takeaways.
+
+Return the result as a strict JSON object with keys "speech_text" and "display_text".
+"""
+                resp = client.models.generate_content(
+                    model=active_model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.3,
+                        response_mime_type="application/json",
+                    ),
+                )
+                parsed = json.loads(resp.text)
+                return {
+                    'speech_text': parsed.get('speech_text', '').strip(),
+                    'display_text': parsed.get('display_text', '').strip(),
+                    'sources': sources,
+                }
+            except Exception as e:
+                logger.warning(f"Gemini feed summarization fallback: {e}")
+
+        # Non-AI Fallback for Feed Summarization
+        headlines = [a.title for a in articles[:4]]
+        speech = f"Here is your top news briefing: {'. '.join(headlines)}."
+        display = "### Today's Top News Briefing\n\n" + "\n".join([f"- **{a.title}** ({a.source.name if a.source else 'Wire'})" for a in articles[:5]])
+        return {
+            'speech_text': speech,
+            'display_text': display,
+            'sources': sources,
+        }
+
+    # 2. Article-specific Q&A or summarization
+    if article_id:
+        from news.models import Article
+        article = Article.objects.filter(id=article_id).first()
+        if article:
+            sources = [{'title': article.title, 'url': article.url}]
+            if HAS_GENAI_LIB and key:
+                try:
+                    client = genai.Client(api_key=key)
+                    prompt = f"""You are OmniAI, an intelligent news assistant.
+The user is asking: "{clean_query}"
+Article Title: {article.title}
+Article Body: {article.body}
+Target language: {language}
+
+Provide:
+1. speech_text: A clear, conversational spoken answer (no markdown, no asterisks, natural for TTS).
+2. display_text: A well-structured markdown answer for display.
+
+Return as a JSON object with keys "speech_text" and "display_text".
+"""
+                    resp = client.models.generate_content(
+                        model=active_model,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            temperature=0.2,
+                            response_mime_type="application/json",
+                        ),
+                    )
+                    parsed = json.loads(resp.text)
+                    return {
+                        'speech_text': parsed.get('speech_text', '').strip(),
+                        'display_text': parsed.get('display_text', '').strip(),
+                        'sources': sources,
+                    }
+                except Exception as e:
+                    logger.warning(f"Article Q&A Gemini fallback: {e}")
+
+            return {
+                'speech_text': f"Regarding {article.title}: {article.body[:250]}.",
+                'display_text': f"**{article.title}**\n\n{article.body[:400]}...",
+                'sources': sources,
+            }
+
+    # 3. Live Questions with Google Search Grounding (Live Scores, Weather, Financial Prices, Current Events)
+    if HAS_GENAI_LIB and key:
+        try:
+            client = genai.Client(api_key=key)
+            prompt = f"""You are OmniAI Voice Assistant, an intelligent news anchor and factual assistant.
+User query: "{clean_query}"
+Language: {language}
+
+Instructions:
+1. Answer accurately using Google Search grounding for real-time live facts (cricket/sports scores, weather, stock prices, breaking events).
+2. Output a natural spoken briefing ('speech_text') that sounds conversational and human when spoken aloud (no asterisks, no raw markdown, clean pauses).
+3. Output a readable, organized display answer ('display_text') with key highlights.
+
+Format your response as a valid JSON object with keys:
+"speech_text": "...",
+"display_text": "..."
+"""
+            resp = client.models.generate_content(
+                model=active_model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    tools=[types.Tool(google_search=types.GoogleSearch())],
+                    temperature=0.3,
+                ),
+            )
+
+            response_raw = resp.text or ""
+            # Extract grounded sources
+            sources = []
+            seen_urls = set()
+            candidates = getattr(resp, 'candidates', None)
+            if candidates and len(candidates) > 0:
+                gm = getattr(candidates[0], 'grounding_metadata', None)
+                if gm and hasattr(gm, 'grounding_chunks') and gm.grounding_chunks:
+                    for chunk in gm.grounding_chunks:
+                        web = getattr(chunk, 'web', None)
+                        if web and getattr(web, 'uri', None):
+                            uri = web.uri
+                            title = getattr(web, 'title', None) or uri
+                            if uri not in seen_urls:
+                                seen_urls.add(uri)
+                                sources.append({'title': title, 'url': uri})
+
+            # Parse JSON if model returned JSON, or parse text
+            speech_text = ""
+            display_text = ""
+            try:
+                # Find JSON block if wrapped in markdown
+                json_str = response_raw.strip()
+                if "```json" in json_str:
+                    json_str = json_str.split("```json")[1].split("```")[0].strip()
+                elif "```" in json_str:
+                    json_str = json_str.split("```")[1].split("```")[0].strip()
+                parsed = json.loads(json_str)
+                speech_text = parsed.get("speech_text", "")
+                display_text = parsed.get("display_text", "")
+            except Exception:
+                display_text = response_raw
+                # Clean speech_text from display text
+                clean_speech = re.sub(r'[\*\_#~`\^\|\\]', '', response_raw)
+                clean_speech = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', clean_speech)
+                speech_text = clean_speech[:400].strip()
+
+            if not speech_text:
+                speech_text = re.sub(r'[\*\_#~`\^\|\\]', '', display_text)[:350].strip()
+
+            return {
+                'speech_text': speech_text,
+                'display_text': display_text,
+                'sources': sources,
+            }
+        except Exception as e:
+            logger.warning(f"Google Search grounded voice assistant fallback: {e}")
+
+    # Fallback if no Gemini key or network failure
+    return {
+        'speech_text': f"I received your request about {clean_query}. Live AI grounding is currently updating.",
+        'display_text': f"### OmniAI Response\n\nI received your query: **{clean_query}**.\n\nPlease ensure your Gemini API key is active to enable real-time Google Search grounding.",
+        'sources': [],
+    }
+
+
+def summarize_web_link(
+    url: str,
+    language: str = 'en',
+    length: str = 'medium',
+    api_key: str = None,
+    model: str = None,
+) -> dict:
+    """
+    Summarizes any web link with strict SSRF defense.
+    1. Validates URL (http/https only, blocks private and loopback IPs).
+    2. Tries Gemini url_context tool, falls back to requests + trafilatura.
+    3. Summarizes extracted content into executive summary, bullets, and speech script.
+    """
+    url_clean = (url or '').strip()
+    if not validate_safe_url(url_clean):
+        raise ValueError("Invalid URL or address is prohibited (private/internal networks are blocked).")
+
+    key = get_gemini_api_key(api_key)
+    active_model = get_gemini_model(model)
+
+    extracted_title = ""
+    extracted_text = ""
+
+    # Strategy 1: Try Gemini with url_context tool if supported
+    if HAS_GENAI_LIB and key and hasattr(types, 'UrlContext'):
+        try:
+            client = genai.Client(api_key=key)
+            prompt = f"Please summarize the article at this link: {url_clean}"
+            resp = client.models.generate_content(
+                model=active_model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    tools=[types.Tool(url_context=types.UrlContext())],
+                    temperature=0.2,
+                ),
+            )
+            if resp.text and len(resp.text.strip()) > 80:
+                extracted_text = resp.text.strip()
+        except Exception as e:
+            logger.debug(f"url_context tool failed or unsupported, using trafilatura fallback: {e}")
+
+    # Strategy 2: Fallback to requests + trafilatura
+    if not extracted_text:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
+        resp = requests.get(url_clean, headers=headers, timeout=9, stream=True)
+        resp.raise_for_status()
+
+        # Read up to 5 MB cap
+        chunks = []
+        total_bytes = 0
+        for chunk in resp.iter_content(chunk_size=32768):
+            chunks.append(chunk)
+            total_bytes += len(chunk)
+            if total_bytes > 5 * 1024 * 1024:
+                break
+        html_bytes = b"".join(chunks)
+        html_str = html_bytes.decode('utf-8', errors='ignore')
+
+        extracted_text = trafilatura.extract(html_str, include_comments=False, include_tables=False) or ""
+        metadata = trafilatura.extract_metadata(html_str)
+        if metadata and metadata.title:
+            extracted_title = metadata.title
+
+    if not extracted_title:
+        parsed_p = urllib.parse.urlparse(url_clean)
+        extracted_title = parsed_p.path.split('/')[-1].replace('-', ' ').replace('_', ' ').title() or parsed_p.netloc
+
+    if not extracted_text or len(extracted_text.strip()) < 40:
+        extracted_text = f"Content from {url_clean} - {extracted_title}"
+
+    # Target length guide
+    length_lower = (length or 'medium').lower()
+    summary_instructions = {
+        'short': "Provide a brief 1-2 paragraph executive summary and 3 punchy takeaways.",
+        'medium': "Provide a comprehensive 3-paragraph summary and 4 key bullet takeaways.",
+        'detailed': "Provide an in-depth 4-5 paragraph detailed analysis with 5 exhaustive takeaways and implications.",
+    }.get(length_lower, "Provide a comprehensive summary and 4 bullet takeaways.")
+
+    # Summarize with Gemini
+    if HAS_GENAI_LIB and key:
+        try:
+            client = genai.Client(api_key=key)
+            prompt = f"""You are OmniAI Link Intelligence Engine.
+Summarize the following web content accurately.
+Target language: {language}
+Length requirement: {summary_instructions}
+
+Article Title: {extracted_title}
+URL: {url_clean}
+Content:
+{extracted_text[:12000]}
+
+Produce a strict JSON response with these keys:
+"title": "{extracted_title}",
+"summary": "...",
+"bullets": ["...", "...", "..."],
+"speech_text": "A natural 3-sentence broadcast briefing suitable for voice readout (no asterisks, no raw URLs).",
+"estimated_read_time": "e.g. 3 min read"
+"""
+            resp = client.models.generate_content(
+                model=active_model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.2,
+                    response_mime_type="application/json",
+                ),
+            )
+            parsed = json.loads(resp.text)
+            return {
+                "status": "success",
+                "url": url_clean,
+                "title": parsed.get("title") or extracted_title,
+                "summary": parsed.get("summary") or extracted_text[:400],
+                "bullets": parsed.get("bullets") or [extracted_title],
+                "speech_text": parsed.get("speech_text") or f"Here is a summary of {extracted_title}.",
+                "estimated_read_time": parsed.get("estimated_read_time") or "2 min read",
+                "sources": [{"title": extracted_title, "url": url_clean}],
+                "language": language,
+            }
+        except Exception as e:
+            logger.warning(f"Gemini link summarizer fallback: {e}")
+
+    # Fallback summary
+    paragraphs = [p.strip() for p in extracted_text.split('\n') if len(p.strip()) > 30]
+    fallback_summary = " ".join(paragraphs[:3]) if paragraphs else extracted_text[:400]
+    fallback_bullets = [p[:100] for p in paragraphs[3:7]] if len(paragraphs) > 3 else [extracted_title]
+
+    return {
+        "status": "success",
+        "url": url_clean,
+        "title": extracted_title,
+        "summary": fallback_summary,
+        "bullets": fallback_bullets,
+        "speech_text": f"Summary of {extracted_title}: {fallback_summary[:250]}.",
+        "estimated_read_time": "2 min read",
+        "sources": [{"title": extracted_title, "url": url_clean}],
+        "language": language,
+    }

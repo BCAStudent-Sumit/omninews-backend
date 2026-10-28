@@ -600,3 +600,65 @@ class SettingsSecurityTest(APITestCase):
         rates = settings.REST_FRAMEWORK.get('DEFAULT_THROTTLE_RATES', {})
         self.assertIn('anon', rates)
         self.assertIn('user', rates)
+
+
+# =============================================================================
+# Voice Assistant & Link Summarizer Unit Tests
+# =============================================================================
+
+class VoiceAssistantAndLinkSummarizerTest(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="voice_user", password="password123")
+        self.source = Source.objects.create(name="Tech Wire", url="https://techwire.com")
+        self.article = Article.objects.create(
+            title="AI Revolution 2026",
+            body="Artificial intelligence is transforming news and live communication.",
+            url="https://techwire.com/ai-2026",
+            source=self.source,
+            published_at=timezone.now(),
+        )
+
+    def test_voice_assistant_unauthenticated_returns_401(self):
+        url = reverse("voice-assistant")
+        response = self.client.post(url, {"text": "what is the score?"}, format="json")
+        self.assertIn(response.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+
+    def test_voice_assistant_missing_text_returns_400(self):
+        url = reverse("voice-assistant")
+        self.client.force_authenticate(user=self.user)
+        response = self.client.post(url, {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_voice_assistant_feed_summary_returns_200(self):
+        url = reverse("voice-assistant")
+        self.client.force_authenticate(user=self.user)
+        response = self.client.post(url, {"text": "summarize today's news", "language": "en"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("speech_text", response.data)
+        self.assertIn("display_text", response.data)
+        self.assertIn("sources", response.data)
+
+    def test_voice_assistant_specific_article_returns_200(self):
+        url = reverse("voice-assistant")
+        self.client.force_authenticate(user=self.user)
+        response = self.client.post(
+            url,
+            {"text": "tell me about this", "article_id": self.article.id},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("speech_text", response.data)
+        self.assertIn("display_text", response.data)
+
+    def test_summarize_link_missing_url_returns_400(self):
+        url = reverse("summarize-link")
+        response = self.client.post(url, {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_summarize_link_blocks_ssrf_private_ips(self):
+        url = reverse("summarize-link")
+        # Localhost / RFC-1918 must be blocked with 403
+        for dangerous_url in ["http://127.0.0.1:8000/api", "http://localhost/admin", "http://192.168.1.1/setup"]:
+            with self.subTest(dangerous_url=dangerous_url):
+                res = self.client.post(url, {"url": dangerous_url}, format="json")
+                self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)

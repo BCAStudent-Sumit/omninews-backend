@@ -221,6 +221,8 @@ REST_FRAMEWORK = {
         # Named scopes used by specific views
         'ai_assist_anon': '20/min',
         'fetch_news_user': '10/min',
+        'voice_assistant_user': '30/min',
+        'summarize_link_anon': '30/min',
     },
 }
 
