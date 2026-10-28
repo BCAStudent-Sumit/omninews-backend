@@ -333,7 +333,7 @@ def get_gemini_model(passed_model: str = None) -> str:
     """Returns the configured Gemini model name."""
     if passed_model and passed_model.strip():
         return passed_model.strip()
-    return getattr(settings, "GEMINI_MODEL", "") or os.environ.get("GEMINI_MODEL", "gemini-flash-lite-latest")
+    return getattr(settings, "GEMINI_MODEL", "") or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 
 def get_gemini_status() -> dict:
@@ -348,10 +348,12 @@ def get_gemini_status() -> dict:
         "model": model,
         "provider": f"Google Gemini ({model})" if has_key else "OmniAI Neural Engine",
         "supported_models": [
-            "gemini-flash-lite-latest",
-            "gemini-3.5-flash-lite",
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+            "gemini-1.5-flash",
+            "gemini-1.5-pro",
             "gemini-flash-latest",
-            "gemini-3.8-flash",
             "gemini-pro-latest",
         ],
         "status": "ready" if has_key else "fallback_active",
@@ -425,10 +427,12 @@ def test_gemini_key(api_key: str, model: str = None) -> dict:
     requested_model = (model or get_gemini_model()).strip()
     candidates = [
         requested_model,
-        "gemini-flash-lite-latest",
-        "gemini-3.5-flash-lite",
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
         "gemini-flash-latest",
-        "gemini-3.8-flash",
         "gemini-pro-latest",
     ]
     # Deduplicate while preserving order
@@ -573,10 +577,12 @@ def generate_with_gemini(
     chosen_model = model or get_gemini_model()
     models_to_try = [chosen_model]
     for alt in [
-        "gemini-flash-lite-latest",
-        "gemini-3.5-flash-lite",
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
         "gemini-flash-latest",
-        "gemini-3.8-flash",
         "gemini-pro-latest",
     ]:
         if alt not in models_to_try:
