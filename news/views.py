@@ -822,12 +822,23 @@ class PublishArticleView(generics.CreateAPIView):
         )
 
 
+class FetchNewsThrottle(rest_framework.throttling.UserRateThrottle):
+    """
+    FIX 8: Per-user throttle for the manual news fetch endpoint.
+    Prevents a logged-in user from hammering external RSS feeds.
+    Uses the named scope "fetch_news_user" from REST_FRAMEWORK[DEFAULT_THROTTLE_RATES].
+    """
+    scope = 'fetch_news_user'
+
+
 class TriggerFetchNewsView(APIView):
     """
     On-demand endpoint to trigger an immediate background news fetch from RSS providers.
-    Requires a logged-in account to prevent abuse / DoS by anonymous visitors.
+    FIX 8: Requires authentication + throttled to 10/min per user to prevent RSS
+    provider bans and excessive server load from repeat callers.
     """
     permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [FetchNewsThrottle]
 
     @extend_schema(request=None, responses={202: None})
     def post(self, request, *args, **kwargs):
@@ -849,106 +860,141 @@ class ImageProxyView(APIView):
     """
     Proxies newsroom photographs to supply Access-Control-Allow-Origin headers
     and proper image MIME content-types required by Flutter Web (CanvasKit / WebGL / Mobile Safari).
+
+    FIX 7 — SSRF protection:
+      * Only fetches URLs whose hostname matches an explicit CDN allowlist.
+      * Blocks raw IP addresses (private, loopback, link-local, reserved).
+      * Hard 5 MB read cap prevents memory exhaustion.
     """
     permission_classes = [permissions.AllowAny]
 
-    # Known-safe image CDN hostnames. Extend this list rather than allowing all.
-    _ALLOWED_IMAGE_HOSTS = {
-        'images.bbc.co.uk', 'ichef.bbci.co.uk',
-        'static.toiimg.com', 'resize.indiatimes.com',
-        'images.hindustantimes.com',
-        'cdn.ndtv.com', 'ndtvimg.com',
-        'images.news18.com',
-        'images.cnbctv18.com',
-        'i.ndtvimg.com',
+    # Extend this set when adding a new image CDN — never use a wildcard.
+    _ALLOWED_IMAGE_HOSTS: frozenset = frozenset({
+        # Indian news sources
+        'static.toiimg.com', 'resize.indiatimes.com', 'timesofindia.indiatimes.com',
+        'images.hindustantimes.com', 'www.hindustantimes.com',
+        'cdn.ndtv.com', 'ndtvimg.com', 'i.ndtvimg.com',
+        'images.news18.com', 'images.cnbctv18.com',
         'akm-img-a-in.tosshub.com',
+        # Global news sources
+        'images.bbc.co.uk', 'ichef.bbci.co.uk',
+        'media.npr.org', 's.abcnews.com', 'gdb.voanews.com',
+        'static01.nyt.com', 'www.reuters.com', 'www.aljazeera.com',
+        # Tech news
         'techcrunch.com', 'cdn.mos.cms.futurecdn.net',
         'media.wired.com', 'images.theverge.com',
-        'media-cldnry.s3-website-us-east-1.amazonaws.com',
-        'static01.nyt.com', 'www.reuters.com',
-        'media.npr.org', 's.abcnews.com',
-        'gdb.voanews.com', 'www.aljazeera.com',
+        # Cloud / CDN infrastructure
         'storage.googleapis.com', 'lh3.googleusercontent.com',
-        'upload.wikimedia.org', 'cloudfront.net',
-        'akamaized.net',
-    }
-    _MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB cap
+        'upload.wikimedia.org',
+        'cloudfront.net', 'akamaized.net',
+        'media-cldnry.s3-website-us-east-1.amazonaws.com',
+    })
 
-    def _is_safe_image_url(self, url: str) -> bool:
-        """Return False for private/internal IPs or non-allowed hosts (SSRF prevention)."""
-        import urllib.parse
+    # FIX 7: 5 MB hard cap — prevents memory exhaustion on slow/large responses.
+    _MAX_IMAGE_BYTES: int = 5 * 1024 * 1024
+
+    def _is_safe_url(self, url: str) -> bool:
+        """
+        Return True only when *url* is safe to proxy:
+          1. scheme is http or https
+          2. hostname is in the approved CDN allowlist (or a sub-domain of one)
+          3. hostname does not resolve to a private / loopback / reserved IP
+        """
         import ipaddress
+        import urllib.parse as _up
+
         try:
-            parsed = urllib.parse.urlparse(url)
-            hostname = (parsed.hostname or '').lower().strip('.')
+            parsed = _up.urlparse(url)
+            if parsed.scheme not in ('http', 'https'):
+                return False
+
+            hostname = (parsed.hostname or '').lower().rstrip('.')
             if not hostname:
                 return False
-            # Check if hostname is in the approved CDN list OR a sub-domain of one
+
+            # Block raw IP addresses — legitimate CDNs use hostnames.
+            try:
+                addr = ipaddress.ip_address(hostname)
+                # Any routable IP that isn't a public address is suspicious.
+                if (
+                    addr.is_private
+                    or addr.is_loopback
+                    or addr.is_link_local
+                    or addr.is_reserved
+                    or addr.is_unspecified
+                    or addr.is_multicast
+                ):
+                    return False
+                # Even a public IP is not on our allowlist — reject it.
+                return False
+            except ValueError:
+                pass  # It is a hostname, not a bare IP — continue to allowlist check.
+
+            # Must be an exact match or a subdomain of an approved host.
             approved = any(
                 hostname == h or hostname.endswith('.' + h)
                 for h in self._ALLOWED_IMAGE_HOSTS
             )
-            if not approved:
-                return False
-            # Block requests that resolve to private/loopback/link-local addresses
-            try:
-                addr = ipaddress.ip_address(hostname)
-                if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
-                    return False
-            except ValueError:
-                pass  # It's a hostname, not a raw IP â€” already checked via allowlist above
-            return True
+            return approved
+
         except Exception:
             return False
 
     def get(self, request):
-        target_url = request.query_params.get("url")
-        if not target_url or not target_url.startswith(("http://", "https://")):
+        target_url = request.query_params.get('url', '').strip()
+
+        if not target_url:
             return HttpResponse(status=400)
 
-        # SSRF guard: only fetch from pre-approved image CDN hostnames
-        if not self._is_safe_image_url(target_url):
+        # FIX 7: SSRF guard — reject before making any outbound request.
+        if not self._is_safe_url(target_url):
             return HttpResponse(status=403)
 
         try:
             req = urllib.request.Request(
                 target_url,
                 headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Accept": "image/jpeg,image/png,image/webp,image/*;q=0.8",
-                    "Referer": target_url,
-                }
+                    'User-Agent': (
+                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                        'AppleWebKit/537.36 (KHTML, like Gecko) '
+                        'Chrome/120.0.0.0 Safari/537.36'
+                    ),
+                    'Accept': 'image/jpeg,image/png,image/webp,image/*;q=0.8',
+                    'Referer': target_url,
+                },
             )
             with urllib.request.urlopen(req, timeout=8) as resp:
-                # Size cap: read at most _MAX_IMAGE_BYTES to prevent memory exhaustion
-                content = resp.read(self._MAX_IMAGE_BYTES)
-                if len(content) == self._MAX_IMAGE_BYTES:
-                    return HttpResponse(status=413)  # Payload Too Large
-                raw_ct = resp.headers.get("Content-Type", "")
-                content_type = raw_ct.split(";")[0].strip().lower() if raw_ct else ""
+                # FIX 7: read at most _MAX_IMAGE_BYTES; reject if server sends more.
+                content = resp.read(self._MAX_IMAGE_BYTES + 1)
+                if len(content) > self._MAX_IMAGE_BYTES:
+                    return HttpResponse(status=413)  # 413 Payload Too Large
 
-                if not content_type or content_type == "application/octet-stream" or not content_type.startswith("image/"):
+                raw_ct = resp.headers.get('Content-Type', '')
+                content_type = raw_ct.split(';')[0].strip().lower() if raw_ct else ''
+
+                if not content_type.startswith('image/') or content_type == 'application/octet-stream':
                     import mimetypes
                     guessed, _ = mimetypes.guess_type(target_url)
-                    if guessed and guessed.startswith("image/"):
+                    if guessed and guessed.startswith('image/'):
                         content_type = guessed
-                    elif content.startswith(b"\xff\xd8\xff"):
-                        content_type = "image/jpeg"
-                    elif content.startswith(b"\x89PNG"):
-                        content_type = "image/png"
-                    elif content.startswith(b"GIF8"):
-                        content_type = "image/gif"
-                    elif content.startswith(b"RIFF") and b"WEBP" in content[:16]:
-                        content_type = "image/webp"
+                    elif content.startswith(b'\xff\xd8\xff'):
+                        content_type = 'image/jpeg'
+                    elif content.startswith(b'\x89PNG'):
+                        content_type = 'image/png'
+                    elif content.startswith(b'GIF8'):
+                        content_type = 'image/gif'
+                    elif content.startswith(b'RIFF') and b'WEBP' in content[:16]:
+                        content_type = 'image/webp'
                     else:
-                        content_type = "image/jpeg"
+                        content_type = 'image/jpeg'
 
-                response = HttpResponse(content, content_type=content_type)
-                response["Access-Control-Allow-Origin"] = "*"
-                response["Access-Control-Allow-Methods"] = "GET, OPTIONS"
-                response["Access-Control-Allow-Headers"] = "*"
-                response["Cache-Control"] = "public, max-age=86400"
-                return response
+                http_resp = HttpResponse(content, content_type=content_type)
+                http_resp['Access-Control-Allow-Origin'] = '*'
+                http_resp['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+                http_resp['Access-Control-Allow-Headers'] = '*'
+                http_resp['Cache-Control'] = 'public, max-age=86400'
+                return http_resp
+
         except Exception:
             return HttpResponse(status=404)
 
@@ -990,8 +1036,12 @@ class AiStatusView(APIView):
 
 
 class AiAssistThrottle(rest_framework.throttling.AnonRateThrottle):
-    """Tight per-IP limit for the AI assist endpoint to protect Gemini quota."""
-    rate = '20/min'
+    """
+    FIX 8: Per-IP throttle for the AI assist endpoint.
+    Uses the named scope "ai_assist_anon" from REST_FRAMEWORK[DEFAULT_THROTTLE_RATES]
+    so the limit can be tuned in settings without a code deploy.
+    """
+    scope = 'ai_assist_anon'
 
 
 class AiAssistView(APIView):

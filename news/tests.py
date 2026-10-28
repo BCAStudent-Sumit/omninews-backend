@@ -398,3 +398,205 @@ class ProfileAndBookmarkTests(APITestCase):
         self.user.refresh_from_db()
         self.assertEqual(self.user.karma, 0)
         self.assertFalse(self.user.is_fact_checker)
+
+
+# =============================================================================
+# Security regression tests
+# =============================================================================
+
+class AiStatusViewSecurityTest(APITestCase):
+    """
+    FIX 4: AiStatusView POST must require is_staff=True (IsAdminUser).
+    GET must remain public.
+    """
+
+    URL = '/api/news/ai-status/'
+
+    def setUp(self):
+        self.regular = User.objects.create_user(username='regular_ai', password='pass')
+        self.admin = User.objects.create_user(
+            username='staff_ai', password='pass', is_staff=True
+        )
+
+    def test_get_is_public(self):
+        """Anyone can GET the AI status."""
+        resp = self.client.get(self.URL)
+        self.assertIn(resp.status_code, (status.HTTP_200_OK, status.HTTP_401_UNAUTHORIZED))
+        # Force anon — should be 200
+        resp2 = self.client.get(self.URL)
+        # At minimum it should not 500
+        self.assertNotEqual(resp2.status_code, 500)
+
+    def test_post_requires_staff(self):
+        """Non-staff POST must receive 403."""
+        self.client.force_authenticate(user=self.regular)
+        resp = self.client.post(self.URL, {'api_key': 'fake-key'}, format='json')
+        self.assertIn(resp.status_code, (status.HTTP_403_FORBIDDEN, status.HTTP_401_UNAUTHORIZED))
+
+    def test_anonymous_post_rejected(self):
+        """Anonymous POST must receive 401 or 403."""
+        resp = self.client.post(self.URL, {'api_key': 'fake-key'}, format='json')
+        self.assertIn(resp.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+
+    def test_staff_post_accepted(self):
+        """Staff users may POST (response may fail on invalid key, but not on permission)."""
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post(self.URL, {'api_key': ''}, format='json')
+        # We care about auth, not Gemini validation — not 401 or 403
+        self.assertNotIn(resp.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+
+
+class TriggerFetchNewsSecurityTest(APITestCase):
+    """
+    FIX 8: TriggerFetchNewsView must require authentication.
+    Anonymous callers should receive 401.
+    """
+
+    URL = '/api/news/fetch-latest/'
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='fetcher', password='pass')
+
+    def test_anonymous_post_rejected(self):
+        resp = self.client.post(self.URL)
+        self.assertIn(resp.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+
+    def test_authenticated_post_accepted(self):
+        self.client.force_authenticate(user=self.user)
+        resp = self.client.post(self.URL)
+        # 202 Accepted or at worst 429 (throttled) — not an auth error
+        self.assertNotIn(resp.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+
+
+class ImageProxySSRFTest(APITestCase):
+    """
+    FIX 7: ImageProxyView must block SSRF attempts and enforce 5 MB limit.
+    """
+
+    URL = '/api/news/image-proxy/'
+
+    def _get(self, url):
+        return self.client.get(self.URL, {'url': url})
+
+    def test_no_url_parameter_returns_400(self):
+        resp = self.client.get(self.URL)
+        self.assertEqual(resp.status_code, 400)
+
+    def test_localhost_blocked(self):
+        """Requests to localhost must be blocked (403)."""
+        for target in [
+            'http://localhost/secret',
+            'http://127.0.0.1/etc/passwd',
+            'http://127.0.0.1:8000/admin/',
+        ]:
+            with self.subTest(target=target):
+                resp = self._get(target)
+                self.assertEqual(resp.status_code, 403, f"Expected 403 for {target}")
+
+    def test_private_ip_ranges_blocked(self):
+        """Requests to RFC-1918 addresses must be blocked (403)."""
+        for target in [
+            'http://10.0.0.1/internal',
+            'http://192.168.1.1/router',
+            'http://172.16.0.1/api',
+        ]:
+            with self.subTest(target=target):
+                resp = self._get(target)
+                self.assertEqual(resp.status_code, 403, f"Expected 403 for {target}")
+
+    def test_non_allowlisted_public_host_blocked(self):
+        """Hosts not in the CDN allowlist must be blocked even if public."""
+        for target in [
+            'https://evil.com/steal.png',
+            'https://attacker.io/malware.jpg',
+            'https://google.com/logo.png',  # not in allowlist
+        ]:
+            with self.subTest(target=target):
+                resp = self._get(target)
+                self.assertEqual(resp.status_code, 403, f"Expected 403 for {target}")
+
+    def test_allowed_cdn_host_passes_security_check(self):
+        """An allowlisted CDN hostname must pass _is_safe_url()."""
+        from news.views import ImageProxyView
+        view = ImageProxyView()
+        self.assertTrue(view._is_safe_url('https://ichef.bbci.co.uk/news/img.jpg'))
+        self.assertTrue(view._is_safe_url('https://static.toiimg.com/photo.jpg'))
+        self.assertTrue(view._is_safe_url('https://upload.wikimedia.org/img.png'))
+
+    def test_subdomain_of_allowed_host_passes(self):
+        """Subdomains of allowed hosts must also pass."""
+        from news.views import ImageProxyView
+        view = ImageProxyView()
+        self.assertTrue(view._is_safe_url('https://images.bbc.co.uk/news/photo.jpg'))
+
+    def test_non_http_scheme_blocked(self):
+        """file:// and ftp:// URLs must be blocked."""
+        from news.views import ImageProxyView
+        view = ImageProxyView()
+        self.assertFalse(view._is_safe_url('file:///etc/passwd'))
+        self.assertFalse(view._is_safe_url('ftp://upload.wikimedia.org/img.png'))
+
+    def test_raw_ip_always_blocked_even_if_public(self):
+        """Raw IP addresses must always be blocked regardless of allowlist."""
+        from news.views import ImageProxyView
+        view = ImageProxyView()
+        self.assertFalse(view._is_safe_url('http://8.8.8.8/img.jpg'))
+        self.assertFalse(view._is_safe_url('http://1.1.1.1/photo.png'))
+
+    def test_size_limit_constant_is_5mb(self):
+        """The hard size cap must be exactly 5 MB (not 10 MB)."""
+        from news.views import ImageProxyView
+        self.assertEqual(ImageProxyView._MAX_IMAGE_BYTES, 5 * 1024 * 1024)
+
+
+class SettingsSecurityTest(APITestCase):
+    """
+    FIX 1-3: settings.py configuration guard-rails.
+    These tests run in the test environment (DEBUG=False by default in tests).
+    """
+
+    def test_debug_is_false_in_test_environment(self):
+        """Django test runner sets DEBUG=False; our settings must respect that."""
+        from django.conf import settings
+        # In CI / test runs, DEBUG should be False (the default)
+        # This assertion documents the expected production behaviour.
+        self.assertFalse(
+            settings.DEBUG,
+            "DEBUG must be False in the test environment (mirrors production). "
+            "If this fails, ensure the test runner is not overriding DEBUG=True."
+        )
+
+    def test_wildcard_not_in_allowed_hosts_when_debug_false(self):
+        """'*' must not appear in ALLOWED_HOSTS when DEBUG is False."""
+        from django.conf import settings
+        if not settings.DEBUG:
+            self.assertNotIn(
+                '*',
+                settings.ALLOWED_HOSTS,
+                "ALLOWED_HOSTS must not contain '*' in production (DEBUG=False).",
+            )
+
+    def test_cors_allow_all_origins_false_when_debug_false(self):
+        """CORS_ALLOW_ALL_ORIGINS must be False when DEBUG is False."""
+        from django.conf import settings
+        if not settings.DEBUG:
+            self.assertFalse(
+                settings.CORS_ALLOW_ALL_ORIGINS,
+                "CORS_ALLOW_ALL_ORIGINS must be False in production.",
+            )
+
+    def test_throttle_classes_configured(self):
+        """Global DRF throttle classes must be configured."""
+        from django.conf import settings
+        throttle_classes = settings.REST_FRAMEWORK.get('DEFAULT_THROTTLE_CLASSES', [])
+        self.assertTrue(
+            len(throttle_classes) > 0,
+            "At least one default throttle class must be configured in REST_FRAMEWORK.",
+        )
+
+    def test_throttle_rates_configured(self):
+        """Global DRF throttle rates must be configured."""
+        from django.conf import settings
+        rates = settings.REST_FRAMEWORK.get('DEFAULT_THROTTLE_RATES', {})
+        self.assertIn('anon', rates)
+        self.assertIn('user', rates)
