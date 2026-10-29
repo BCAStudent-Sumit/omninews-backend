@@ -30,7 +30,8 @@ class StreamSigner:
 
         parsed = urllib.parse.urlparse(stream_url)
         path = parsed.path or "/"
-        expiry = int(time.time()) + lifetime_seconds
+        now = int(time.time())
+        expiry = ((now // lifetime_seconds) + 1) * lifetime_seconds
         uid_str = str(user_id) if user_id is not None else "anon"
 
         secret = get_stream_signing_secret()

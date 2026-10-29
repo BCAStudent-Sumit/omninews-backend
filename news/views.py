@@ -1376,9 +1376,19 @@ class LiveTelecastView(APIView):
             else:
                 meets_tier = has_pro
 
+            def _sign_if_needed(raw_url):
+                if not raw_url:
+                    return ""
+                lower = raw_url.lower()
+                # YouTube and Twitch embeds must retain their exact stable source URL
+                if any(x in lower for x in ['youtube.com', 'youtu.be', 'twitch.tv', 'vimeo.com']):
+                    return raw_url
+                # For private streams, sign with stable bucketed expiry
+                return StreamSigner.sign_url(raw_url, user_id, lifetime_seconds=300)
+
             if meets_tier:
-                stream_url = StreamSigner.sign_url(raw_stream_url, user_id, lifetime_seconds=300) if raw_stream_url else ""
-                stream_url_vr = StreamSigner.sign_url(raw_stream_vr, user_id, lifetime_seconds=300) if (raw_stream_vr and has_exclusive) else ""
+                stream_url = _sign_if_needed(raw_stream_url)
+                stream_url_vr = _sign_if_needed(raw_stream_vr) if has_exclusive else ""
                 requires_sub = False
             else:
                 stream_url = ""
