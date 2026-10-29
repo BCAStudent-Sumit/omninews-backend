@@ -333,7 +333,7 @@ def get_gemini_model(passed_model: str = None) -> str:
     """Returns the configured Gemini model name."""
     if passed_model and passed_model.strip():
         return passed_model.strip()
-    return getattr(settings, "GEMINI_MODEL", "") or os.environ.get("GEMINI_MODEL", "gemini-flash-lite-latest")
+    return getattr(settings, "GEMINI_MODEL", "") or os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
 
 
 def get_gemini_status() -> dict:
@@ -348,9 +348,8 @@ def get_gemini_status() -> dict:
         "model": model,
         "provider": f"Google Gemini ({model})" if has_key else "OmniAI Neural Engine",
         "supported_models": [
-            "gemini-flash-lite-latest",
-            "gemini-3.5-flash-lite",
-            "gemini-3.1-flash-lite",
+            "gemini-3-flash-preview",
+            "gemini-2.5-flash",
             "gemini-flash-latest",
         ],
         "status": "ready" if has_key else "fallback_active",
@@ -1115,11 +1114,54 @@ Format your response as a valid JSON object with keys:
             }
         except Exception as e:
             logger.warning(f"Google Search grounded voice assistant fallback: {e}")
+            try:
+                # Direct generation without Google Search grounding tool (avoids 429 quota exhaustion)
+                simple_prompt = f"""You are OmniAI Voice Assistant, an intelligent news anchor and factual assistant.
+User query: "{clean_query}"
+Language: {language}
+
+Instructions:
+1. Answer accurately and directly in the requested language ({language}).
+2. Output a concise spoken response (1-2 sentences, suitable for speech synthesis).
+3. Do not include markdown asterisks, raw URLs, or formatting artifacts.
+"""
+                resp = client.models.generate_content(
+                    model=active_model,
+                    contents=simple_prompt,
+                )
+                raw_text = (resp.text or "").strip()
+                if raw_text:
+                    clean_speech = re.sub(r'[\*\_#~`\^\|\\]', '', raw_text).strip()
+                    return {
+                        'speech_text': clean_speech,
+                        'display_text': raw_text,
+                        'sources': [],
+                    }
+            except Exception as e2:
+                logger.warning(f"Direct Gemini voice assistant fallback failed: {e2}")
 
     # Fallback if no Gemini key or network failure
+    # Detect language for localized fallback message
+    is_bn = any('\u0980' <= c <= '\u09ff' for c in clean_query) or language.startswith('bn')
+    is_hi = any('\u0900' <= c <= '\u097f' for c in clean_query) or language.startswith('hi')
+    is_es = language.startswith('es')
+
+    if is_bn:
+        speech = f"আমি আপনার প্রশ্ন '{clean_query}' বুঝতে পেরেছি। লাইভ সংযোগ স্থাপন করা হচ্ছে।"
+        disp = f"### OmniAI প্রতিক্রিয়া\n\nআপনার প্রশ্ন: **{clean_query}**\n\nস্মার্ট সহকারী লাইভ আপডেট হচ্ছে।"
+    elif is_hi:
+        speech = f"मैंने आपका प्रश्न '{clean_query}' समझ लिया है। लाइव जानकारी अपडेट की जा रही है।"
+        disp = f"### OmniAI उत्तर\n\nआपका सवाल: **{clean_query}**\n\nस्मार्ट सहायक लाइव अपडेट हो रहा है।"
+    elif is_es:
+        speech = f"He recibido su consulta sobre '{clean_query}'. El asistente está procesando su respuesta."
+        disp = f"### OmniAI Respuesta\n\nSu consulta: **{clean_query}**\n\nEl asistente inteligente se está actualizando."
+    else:
+        speech = f"I received your request about {clean_query}. OmniAI is ready to assist you."
+        disp = f"### OmniAI Response\n\nI received your query: **{clean_query}**.\n\nPlease ensure your connection is active."
+
     return {
-        'speech_text': f"I received your request about {clean_query}. Live AI grounding is currently updating.",
-        'display_text': f"### OmniAI Response\n\nI received your query: **{clean_query}**.\n\nPlease ensure your Gemini API key is active to enable real-time Google Search grounding.",
+        'speech_text': speech,
+        'display_text': disp,
         'sources': [],
     }
 
