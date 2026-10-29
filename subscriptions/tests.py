@@ -10,7 +10,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from subscriptions.models import Plan, Subscription, PaymentEvent, VrPairing
+from subscriptions.models import Plan, Subscription, PaymentEvent, VrPairing, VrSessionLog
 from subscriptions.signing import StreamSigner
 from news.models import LiveTelecast
 
@@ -534,3 +534,46 @@ class SubscriptionsAndStreamTests(TestCase):
         resp2 = self.client.get('/api/news/live-scores/')
         self.assertEqual(resp2.status_code, status.HTTP_200_OK)
         self.assertEqual(resp1.data, resp2.data)
+
+    # -------------------------------------------------------------
+    # 8. VR SESSION LOGGING TESTS (COST ESTIMATION)
+    # -------------------------------------------------------------
+    def test_vr_session_unauthenticated_returns_401(self):
+        resp = self.client.post('/api/subscriptions/vr-session/', {
+            'action': 'start',
+            'session_id': 'sess_123',
+            'telecast_id': self.telecast.id
+        })
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_vr_session_logging_start_and_end(self):
+        self.client.force_authenticate(user=self.user)
+
+        # 1. Start session
+        resp_start = self.client.post('/api/subscriptions/vr-session/', {
+            'action': 'start',
+            'session_id': 'sess_abc123',
+            'telecast_id': self.telecast.id,
+            'watch_time_seconds': 0.0
+        })
+        self.assertEqual(resp_start.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(resp_start.data['action'], 'start')
+        self.assertEqual(resp_start.data['session_id'], 'sess_abc123')
+
+        # 2. End session with 240 seconds watch time
+        resp_end = self.client.post('/api/subscriptions/vr-session/', {
+            'action': 'end',
+            'session_id': 'sess_abc123',
+            'telecast_id': self.telecast.id,
+            'watch_time_seconds': 240.5
+        })
+        self.assertEqual(resp_end.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(resp_end.data['action'], 'end')
+        self.assertEqual(resp_end.data['watch_time_seconds'], 240.5)
+
+        # Verify DB records
+        logs = VrSessionLog.objects.filter(session_id='sess_abc123', user=self.user)
+        self.assertEqual(logs.count(), 2)
+        end_log = logs.filter(action='end').first()
+        self.assertEqual(end_log.watch_time_seconds, 240.5)
+        self.assertEqual(end_log.telecast_id, self.telecast.id)

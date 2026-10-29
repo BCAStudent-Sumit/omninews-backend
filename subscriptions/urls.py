@@ -7,6 +7,7 @@ from .views import (
     StreamTokenView,
     VrPairView,
     VrPairRedeemView,
+    VrSessionView,
 )
 
 urlpatterns = [
@@ -17,4 +18,5 @@ urlpatterns = [
     path('stream-token/', StreamTokenView.as_view(), name='stream_token'),
     path('vr-pair/', VrPairView.as_view(), name='vr_pair'),
     path('vr-pair/redeem/', VrPairRedeemView.as_view(), name='vr_pair_redeem'),
+    path('vr-session/', VrSessionView.as_view(), name='vr_session'),
 ]

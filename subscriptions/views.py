@@ -4,7 +4,7 @@ import datetime
 from django.conf import settings
 from django.core.cache import cache
 from rest_framework.throttling import AnonRateThrottle
-from .models import VrPairing
+from .models import VrPairing, VrSessionLog
 import os
 import logging
 import requests
@@ -512,3 +512,43 @@ class StreamTokenView(APIView):
         user_id = request.user.id
         token_payload = StreamSigner.create_token_payload(path, user_id, lifetime_seconds=300)
         return Response(token_payload, status=status.HTTP_200_OK)
+
+
+class VrSessionView(APIView):
+    """
+    POST /api/subscriptions/vr-session/
+    Session logging (no personal data beyond user id):
+    Logs session start/end and watch time so streaming costs can be estimated per user.
+    Auth required (standard JWT or VR token scope="vr").
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        action = str(request.data.get('action', 'heartbeat')).strip().lower()
+        session_id = str(request.data.get('session_id', '')).strip()[:64] or uuid.uuid4().hex
+        telecast_id = request.data.get('telecast_id')
+        try:
+            telecast_id = int(telecast_id) if telecast_id is not None else None
+        except (ValueError, TypeError):
+            telecast_id = None
+
+        try:
+            watch_time = float(request.data.get('watch_time_seconds', 0.0))
+        except (ValueError, TypeError):
+            watch_time = 0.0
+
+        session_log = VrSessionLog.objects.create(
+            user=user,
+            session_id=session_id,
+            telecast_id=telecast_id,
+            action=action,
+            watch_time_seconds=watch_time,
+        )
+
+        return Response({
+            "status": "logged",
+            "session_id": session_log.session_id,
+            "watch_time_seconds": session_log.watch_time_seconds,
+            "action": session_log.action,
+        }, status=status.HTTP_201_CREATED)

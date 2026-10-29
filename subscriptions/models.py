@@ -152,3 +152,24 @@ class VrPairing(models.Model):
     def __str__(self):
         status_str = "USED" if self.used else ("EXPIRED" if self.expires_at <= timezone.now() else "ACTIVE")
         return f"VR Code: {self.code} ({self.user.username}) - {status_str}"
+
+
+class VrSessionLog(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='vr_sessions'
+    )
+    session_id = models.CharField(max_length=64, db_index=True)
+    telecast_id = models.IntegerField(null=True, blank=True)
+    action = models.CharField(max_length=20, default='start')
+    watch_time_seconds = models.FloatField(default=0.0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "VR Session Log"
+        verbose_name_plural = "VR Session Logs"
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"VR Session {self.session_id} - User {self.user_id} - {self.watch_time_seconds}s"

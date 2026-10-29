@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Plan, Subscription, PaymentEvent, VrPairing
+from .models import Plan, Subscription, PaymentEvent, VrPairing, VrSessionLog
 
 
 @admin.register(Plan)
@@ -32,3 +32,11 @@ class VrPairingAdmin(admin.ModelAdmin):
     list_filter = ('used',)
     search_fields = ('code', 'user__username', 'user__email')
     readonly_fields = ('created_at', 'expires_at')
+
+
+@admin.register(VrSessionLog)
+class VrSessionLogAdmin(admin.ModelAdmin):
+    list_display = ('session_id', 'user', 'telecast_id', 'action', 'watch_time_seconds', 'created_at')
+    list_filter = ('action', 'created_at')
+    search_fields = ('session_id', 'user__id', 'telecast_id')
+    readonly_fields = ('created_at',)
