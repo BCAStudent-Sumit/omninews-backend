@@ -38,6 +38,7 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/podcasts/', include('news.urls')),
     path('api/news/', include('news.urls')),
+    path('api/subscriptions/', include('subscriptions.urls')),
 
     # JWT Auth Endpoints
     path('api/auth/login/', TokenObtainPairView.as_view(), name='token_obtain_pair'),

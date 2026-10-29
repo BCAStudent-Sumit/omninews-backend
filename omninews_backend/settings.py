@@ -24,6 +24,7 @@ DEBUG = os.environ.get('DEBUG', 'False').strip().lower() in ('1', 'true', 'yes')
 _base_hosts = [
     '127.0.0.1',
     'localhost',
+    'testserver',
     '10.0.2.2',
     '.onrender.com',
     '.vercel.app',
@@ -59,6 +60,7 @@ INSTALLED_APPS = [
     # Local
     'users',
     'news.apps.NewsConfig',
+    'subscriptions.apps.SubscriptionsConfig',
 ]
 
 MIDDLEWARE = [

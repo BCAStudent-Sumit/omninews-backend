@@ -124,7 +124,14 @@ class LiveTelecast(models.Model):
     is_live = models.BooleanField(default=False)
     title = models.CharField(max_length=255, default="ICC T20 World Cup • IND vs AUS")
     sport = models.CharField(max_length=100, default="Cricket")
+    TIER_CHOICES = [
+        ('pro', 'Pro'),
+        ('exclusive', 'Exclusive'),
+    ]
+
     stream_url = models.TextField(blank=True, default="")
+    stream_url_vr = models.TextField(blank=True, default="")
+    required_tier = models.CharField(max_length=20, choices=TIER_CHOICES, default="pro")
     viewers = models.CharField(max_length=50, default="18.4K")
     updated_at = models.DateTimeField(auto_now=True)
 

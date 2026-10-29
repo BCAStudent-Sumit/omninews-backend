@@ -1326,14 +1326,62 @@ class LiveTelecastView(APIView):
         global _TELECAST_STATE
         try:
             from .models import LiveTelecast
+            from subscriptions.signing import StreamSigner
             telecast = LiveTelecast.get_current()
+
             is_auth = bool(request.user and request.user.is_authenticated)
+            user_id = request.user.id if is_auth else 'anon'
+
+            required_tier = getattr(telecast, 'required_tier', 'pro') or 'pro'
+            raw_stream_url = str(telecast.stream_url or "")
+            raw_stream_vr = str(getattr(telecast, 'stream_url_vr', '') or "")
+
+            has_pro = False
+            has_exclusive = False
+
+            if is_auth:
+                try:
+                    from subscriptions.models import Subscription
+                    sub = (
+                        Subscription.objects.filter(user=request.user)
+                        .select_related('plan')
+                        .order_by('-updated_at')
+                        .first()
+                    )
+                    if sub and sub.is_currently_active:
+                        slug = (sub.plan.slug or '').lower()
+                        if slug == 'exclusive':
+                            has_pro = True
+                            has_exclusive = True
+                        elif slug == 'pro':
+                            has_pro = True
+                except Exception as sub_err:
+                    logger.warning(f"[LiveTelecastView] Error reading subscription: {sub_err}")
+
+            # Check if user tier meets required_tier
+            meets_tier = False
+            if required_tier == 'exclusive':
+                meets_tier = has_exclusive
+            else:
+                meets_tier = has_pro
+
+            if meets_tier:
+                stream_url = StreamSigner.sign_url(raw_stream_url, user_id, lifetime_seconds=300) if raw_stream_url else ""
+                stream_url_vr = StreamSigner.sign_url(raw_stream_vr, user_id, lifetime_seconds=300) if (raw_stream_vr and has_exclusive) else ""
+                requires_sub = False
+            else:
+                stream_url = ""
+                stream_url_vr = ""
+                requires_sub = True
+
             state = {
                 "is_live": bool(telecast.is_live),
                 "title": str(telecast.title or ""),
                 "sport": str(telecast.sport or "Cricket"),
-                # Only authenticated members who logged in or created an account can view live stream
-                "stream_url": str(telecast.stream_url or "") if is_auth else "",
+                "stream_url": stream_url,
+                "stream_url_vr": stream_url_vr,
+                "requires_subscription": requires_sub,
+                "required_tier": required_tier,
                 "requires_login": not is_auth,
                 "viewers": str(telecast.viewers or "18.4K"),
             }
@@ -1344,8 +1392,11 @@ class LiveTelecastView(APIView):
             raw_state = cache.get("live_telecast_state") or _TELECAST_STATE
             is_auth = bool(request.user and request.user.is_authenticated)
             state = dict(raw_state)
+            state["stream_url"] = ""
+            state["stream_url_vr"] = ""
+            state["requires_subscription"] = True
+            state["required_tier"] = "pro"
             if not is_auth:
-                state["stream_url"] = ""
                 state["requires_login"] = True
             return Response(state, status=status.HTTP_200_OK)
 
