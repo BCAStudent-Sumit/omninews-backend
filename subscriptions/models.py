@@ -123,3 +123,32 @@ class PaymentEvent(models.Model):
 
     def __str__(self):
         return f"[{self.provider}] {self.event_type} - {self.event_id}"
+
+
+class VrPairing(models.Model):
+    code = models.CharField(max_length=6, db_index=True, help_text="6-digit pairing code for VR headset")
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='vr_pairings'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    used = models.BooleanField(default=False)
+    failed_attempts = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        verbose_name = "VR Pairing Code"
+        verbose_name_plural = "VR Pairing Codes"
+        ordering = ['-created_at']
+
+    def is_valid(self) -> bool:
+        return (
+            not self.used
+            and self.failed_attempts < 5
+            and self.expires_at > timezone.now()
+        )
+
+    def __str__(self):
+        status_str = "USED" if self.used else ("EXPIRED" if self.expires_at <= timezone.now() else "ACTIVE")
+        return f"VR Code: {self.code} ({self.user.username}) - {status_str}"

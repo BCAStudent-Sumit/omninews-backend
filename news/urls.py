@@ -21,6 +21,7 @@ from .views import (
     ApplePodcastsSearchView,
     VoiceAssistantView,
     SummarizeLinkView,
+    LiveScoresView,
 )
 
 urlpatterns = [
@@ -32,6 +33,7 @@ urlpatterns = [
     path("podcasts/apple/", ApplePodcastsSearchView.as_view(), name="apple-podcasts-search"),
     path("telecast/", LiveTelecastView.as_view(), name="live-telecast"),
     path("live-telecast/", LiveTelecastView.as_view(), name="live-telecast-alias"),
+    path("live-scores/", LiveScoresView.as_view(), name="live-scores"),
     path("markets/", MarketQuotesView.as_view(), name="market-quotes"),
     path("genres/", GenreListView.as_view(), name="genre-list"),
     path("articles/", ArticleListView.as_view(), name="article-list"),

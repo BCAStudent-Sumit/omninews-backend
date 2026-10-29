@@ -225,8 +225,12 @@ REST_FRAMEWORK = {
         'fetch_news_user': '10/min',
         'voice_assistant_user': '30/min',
         'summarize_link_anon': '30/min',
+        'vr_pair_redeem': '10/min',
     },
 }
+
+# VR Live Broadcast feature flag
+VR_ENABLED = os.getenv('VR_ENABLED', 'False').lower() in ('true', '1')
 
 # ---------------------------------------------------------------------------
 # SimpleJWT

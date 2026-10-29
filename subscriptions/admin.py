@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Plan, Subscription, PaymentEvent
+from .models import Plan, Subscription, PaymentEvent, VrPairing
 
 
 @admin.register(Plan)
@@ -24,3 +24,11 @@ class PaymentEventAdmin(admin.ModelAdmin):
     list_filter = ('provider', 'processed', 'event_type')
     search_fields = ('event_id', 'event_type')
     readonly_fields = ('received_at',)
+
+
+@admin.register(VrPairing)
+class VrPairingAdmin(admin.ModelAdmin):
+    list_display = ('code', 'user', 'used', 'failed_attempts', 'expires_at', 'created_at')
+    list_filter = ('used',)
+    search_fields = ('code', 'user__username', 'user__email')
+    readonly_fields = ('created_at', 'expires_at')

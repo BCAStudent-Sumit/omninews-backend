@@ -1724,3 +1724,25 @@ class SummarizeLinkView(APIView):
                 {"detail": f"Failed to extract and summarize link: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+class LiveScoresView(APIView):
+    """
+    GET /api/news/live-scores/
+    Real-time normalized sports scores cached for 10 seconds server-side.
+    Data source is a swappable provider (reads SPORTS_API_KEY from env with mock fallback).
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        from django.core.cache import cache
+        from .sports_provider import get_sports_provider
+
+        cache_key = "live_sports_scores_cache"
+        scores = cache.get(cache_key)
+        if scores is None:
+            provider = get_sports_provider()
+            scores = provider.get_live_scores()
+            cache.set(cache_key, scores, timeout=10)
+
+        return Response(scores, status=status.HTTP_200_OK)
