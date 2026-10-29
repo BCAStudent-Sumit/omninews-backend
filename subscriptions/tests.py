@@ -577,3 +577,36 @@ class SubscriptionsAndStreamTests(TestCase):
         end_log = logs.filter(action='end').first()
         self.assertEqual(end_log.watch_time_seconds, 240.5)
         self.assertEqual(end_log.telecast_id, self.telecast.id)
+
+
+    def test_admin_staff_has_unrestricted_access_without_consumer_subscription(self):
+        """Admin/staff users bypass consumer paywalls and receive full 2D and VR telecast access."""
+        admin_user = User.objects.create_user(
+            username='admin_boss',
+            email='admin@omninews.com',
+            password='Password123!',
+            is_staff=True,
+            is_superuser=True
+        )
+
+        # 1. /api/subscriptions/me/ should return has_subscription: True with live_2d & live_vr entitlements
+        self.client.force_authenticate(user=admin_user)
+        me_resp = self.client.get('/api/subscriptions/me/')
+        self.assertEqual(me_resp.status_code, status.HTTP_200_OK)
+        self.assertTrue(me_resp.data['has_subscription'])
+        self.assertEqual(me_resp.data['status'], 'active')
+        self.assertTrue(me_resp.data['entitlements']['live_2d'])
+        self.assertTrue(me_resp.data['entitlements']['live_vr'])
+
+        # 2. /api/news/live-telecast/ should grant stream access without requiring consumer purchase
+        telecast_resp = self.client.get('/api/news/live-telecast/')
+        self.assertEqual(telecast_resp.status_code, status.HTTP_200_OK)
+        self.assertFalse(telecast_resp.data['requires_subscription'])
+        self.assertIn('token=', telecast_resp.data['stream_url'])
+        self.assertIn('token=', telecast_resp.data['stream_url_vr'])
+
+        # 3. /api/subscriptions/vr-pair/ should create 6-digit VR pairing code for admin when VR is enabled
+        with override_settings(VR_ENABLED=True):
+            vr_pair_resp = self.client.post('/api/subscriptions/vr-pair/')
+            self.assertEqual(vr_pair_resp.status_code, status.HTTP_201_CREATED)
+            self.assertEqual(len(vr_pair_resp.data['code']), 6)

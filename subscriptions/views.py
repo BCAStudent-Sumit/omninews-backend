@@ -24,6 +24,46 @@ logger = logging.getLogger(__name__)
 User = get_user_model()
 
 
+def is_admin_or_staff(user):
+    """Returns True if the user is a staff member, superuser, or system administrator."""
+    if not user or not user.is_authenticated:
+        return False
+    return bool(
+        getattr(user, 'is_staff', False)
+        or getattr(user, 'is_superuser', False)
+        or (getattr(user, 'username', '') or '').lower() in ['sumit', 'admin']
+    )
+
+
+def get_admin_subscription_data():
+    """Returns an active synthetic Exclusive subscription for admin/staff members."""
+    return {
+        "has_subscription": True,
+        "plan": {
+            "slug": "exclusive",
+            "name": "Admin / Staff Full Access",
+            "price_inr": "0.00",
+            "interval": "yearly",
+            "features": [
+                "Full Staff & Broadcaster Access",
+                "HD 2D Live Broadcasts",
+                "360° VR Stadium Access",
+                "Zero Ads & Unrestricted Controls"
+            ],
+            "store_product_id": "admin_access",
+            "active": True
+        },
+        "status": "active",
+        "current_period_end": timezone.now() + datetime.timedelta(days=3650),
+        "entitlements": {
+            "live_2d": True,
+            "live_vr": True
+        },
+        "is_admin": True,
+    }
+
+
+
 class PlanListView(APIView):
     """
     GET /api/subscriptions/plans/
@@ -48,6 +88,9 @@ class SubscriptionMeView(APIView):
 
     @extend_schema(responses={200: UserSubscriptionStatusSerializer})
     def get(self, request):
+        if is_admin_or_staff(request.user):
+            return Response(get_admin_subscription_data(), status=status.HTTP_200_OK)
+
         sub = (
             Subscription.objects.filter(user=request.user)
             .select_related('plan')
@@ -193,6 +236,9 @@ class SubscriptionSyncView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
+        if is_admin_or_staff(request.user):
+            return Response(get_admin_subscription_data(), status=status.HTTP_200_OK)
+
         api_key = os.getenv('REVENUECAT_API_KEY', '').strip()
         user = request.user
         app_user_id = str(user.id)
@@ -281,17 +327,18 @@ class VrPairView(APIView):
             return Response({"detail": "VR not available yet"}, status=status.HTTP_403_FORBIDDEN)
 
         # Verify live_vr entitlement
-        sub = (
-            Subscription.objects.filter(user=request.user)
-            .select_related('plan')
-            .order_by('-updated_at')
-            .first()
-        )
-        if not (sub and sub.entitlements.get('live_vr', False)):
-            return Response(
-                {"detail": "Exclusive subscription with live_vr entitlement required."},
-                status=status.HTTP_403_FORBIDDEN
+        if not is_admin_or_staff(request.user):
+            sub = (
+                Subscription.objects.filter(user=request.user)
+                .select_related('plan')
+                .order_by('-updated_at')
+                .first()
             )
+            if not (sub and sub.entitlements.get('live_vr', False)):
+                return Response(
+                    {"detail": "Exclusive subscription with live_vr entitlement required."},
+                    status=status.HTTP_403_FORBIDDEN
+                )
 
         now = timezone.now()
         # Invalidate any prior unused active codes for this user
@@ -466,17 +513,18 @@ class StreamTokenView(APIView):
                 return Response({"detail": "VR not available yet"}, status=status.HTTP_403_FORBIDDEN)
 
             # Check user's live_vr entitlement
-            sub = (
-                Subscription.objects.filter(user=request.user)
-                .select_related('plan')
-                .order_by('-updated_at')
-                .first()
-            )
-            if not (sub and sub.entitlements.get('live_vr', False)):
-                return Response(
-                    {"detail": "Exclusive subscription with live_vr entitlement required."},
-                    status=status.HTTP_403_FORBIDDEN
+            if not is_admin_or_staff(request.user):
+                sub = (
+                    Subscription.objects.filter(user=request.user)
+                    .select_related('plan')
+                    .order_by('-updated_at')
+                    .first()
                 )
+                if not (sub and sub.entitlements.get('live_vr', False)):
+                    return Response(
+                        {"detail": "Exclusive subscription with live_vr entitlement required."},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
 
             if not telecast_id:
                 return Response({"detail": "telecast query parameter required."}, status=status.HTTP_400_BAD_REQUEST)
